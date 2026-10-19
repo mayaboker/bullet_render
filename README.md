@@ -14,7 +14,8 @@ A parked red delivery truck sits **50 m ahead of the physics origin** (horizonta
 ground distance, Bullet X=50 m / Godot Z=−50 m), following the terrain slope. The
 drone spawn stays at its physics position. The default spectator view is wide
 enough to include both; right-drag or scroll to inspect the truck. Scenery,
-including the truck, is visual only and has no Bullet collision body.
+including the truck, has no Bullet collision body. Godot detects truck contact
+to end app-owned episodes without applying collision forces.
 
 ## Build
 
@@ -221,8 +222,8 @@ The combined tasks launch the app with `--mission-config
 ../los_tracking/examples/bullet_profile.json`. Wait for app READY, then press
 Godot Start: warmup, arm, climb 20 m relative to the initial barometer, settle
 for 3 s and wait for a fresh post-hover bbox before LOS. Missing bbox times out
-after 5 s; expired RC or LOS faults freeze physics. No collision or landing
-is inferred. See [app mission details](../bullet_app/README.md). The separate
+after 5 s; expired RC or LOS faults freeze physics. Renderer-confirmed truck
+contact completes the scenario; landing is not inferred. See [app mission details](../bullet_app/README.md). The separate
 Position flight task still runs the square.
 
 With a real graphics display, run the isolated-port check:
@@ -236,3 +237,47 @@ the app to verify the expiry watchdog freezes physics, and reads back the bag.
 Logs/report are retained in `/tmp/bullet-app-flight`; temporary bags are removed.
 The native adapter preserves source pose/feedback identity in descriptor v2,
 using the measurement timestamp for capture_ns; binary SHM remains v1.
+
+## Truck collision and completion
+
+In app-owned flight, Godot checks a **0.42 m drone sphere** against convex
+colliders derived from individual red-truck meshes. Initial overlap and swept
+queries detect contact even when poses skip past the truck. Collision queries run
+on the main physics thread, independently of GPU readback. Terrain, trees and
+rocks remain outside detection; there is no impact force, bounce or landing.
+
+Godot reports `render/drone_1/collision` on existing port 5557. Physics validates
+controller/episode identity and the stamped source against its recent history,
+freezes before another step and publishes `scenario/ended` on port 5555.
+Simulation state v2 embeds the same success/target_hit result. The app latches
+COMPLETED, withdraws RC intent, and Godot shows **Completed / Target hit**. All
+processes stay open. Start or Reset clears the result for a fresh episode.
+
+Reports retry every 100 ms. Without confirmation after one second, Godot displays
+an acknowledgement failure and requests ordinary Stop; it does not claim success.
+The confirmed result repeats for late subscribers. Its contact source and final
+frozen physics source are separate: physics may advance during report delivery
+and is not rewound to the contact point.
+
+The recorder stores raw proposals and one confirmed event per event ID, then
+allows 250 ms for final feedback/app diagnostics before closing. A stopped-state
+snapshot also supplies the result if the standalone event was missed. Arrival
+RawImage timestamps still do not establish exact image/pose association.
+
+```bash
+# Real-display deterministic source trajectory through production RC/lifecycle wiring.
+uv run --locked --all-packages --all-extras --all-groups python tools/check_collision.py
+# Discard all collision reports: verify timeout, Stop and absence of false success.
+uv run --locked --all-packages --all-extras --all-groups python tools/check_collision.py \
+  --reject-collisions --report-dir /tmp/bullet-collision-timeout
+# Geometry alone (headless does not validate pixels).
+godot --headless --path godot --script test_collision.gd
+```
+
+The integration probe substitutes deterministic observations for physical motion;
+collision detection, transport, physics-loop termination, app and recorder use
+production code. It deliberately drops the first report to verify retry. This
+checks termination without requiring LOS tuning to navigate into the truck.
+Logs/report and a completion screenshot remain in `/tmp/bullet-collision/`;
+temporary recordings are removed. The separate square examples retain their
+legacy lifecycle and do not enable this stamped-pose collision flow.

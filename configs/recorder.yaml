@@ -74,3 +74,21 @@ topics:
     schema: bullet_msgs:mission.json
     # Unix arrival time; simulation_time_s is the mission clock.
     timestamp_source: receive
+  # Raw renderer proposal; a collision becomes final only after physics confirms it.
+  - key: render/drone_1/collision
+    # Two-part topic and JSON report.
+    input: json
+    # Shares Godot's lifecycle publisher; no new port.
+    endpoint: tcp://127.0.0.1:5557
+    # Current controller, stamped source, target and detected drone position in metres.
+    schema: bullet_msgs:collision.json
+    # Unix arrival timestamp; source.measurement_us remains monotonic time.
+    timestamp_source: receive
+  # Confirmed, repeated and deduplicated terminal result on physics telemetry.
+  - key: scenario/ended
+    # JSON result is also embedded in simulation state v2 for late subscribers.
+    input: json
+    # Success/target_hit, original collision and final frozen source.
+    schema: bullet_msgs:scenario_end.json
+    # Unix arrival timestamp; ended_us is the host monotonic confirmation time.
+    timestamp_source: receive

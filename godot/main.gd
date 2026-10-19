@@ -1,12 +1,21 @@
 extends Node3D
 
 const Frames = preload("res://frames.gd")
+const TruckCollision = preload("res://truck_collision.gd")
+const COLLISION_RETRY_MS := 100
+const COLLISION_ACK_TIMEOUT_MS := 1000
 const WORLD_SIZE := 500.0
 const GRID := 120
 const STALE_MS := 1000
 # Horizontal metres from the physics origin, in Godot's X/Z ground plane.
 const TRUCK_POSITION_M := Vector2(0.0, -50.0)
 const TRUCK_CLEARANCE_M := 6.0
+var collision_detector: RefCounted
+var pending_collision: Dictionary = {}
+var collision_started_ms := 0
+var collision_retry_ms := 0
+var collision_episode := ""
+var collision_failed := false
 var adapter: ZmqCameraAdapter
 var busy := false
 var capture_only := false
@@ -45,6 +54,7 @@ func _ready() -> void:
 	noise.seed = 271828
 	noise.frequency = 0.012
 	_world()
+	collision_detector = TruckCollision.new(get_world_3d(), truck)
 	_cameras()
 	_ui()
 	fps_started = Time.get_ticks_msec()
@@ -285,7 +295,7 @@ func _ui() -> void:
 	preview.texture = viewport.get_texture()
 	column.add_child(preview)
 	var hint := Label.new()
-	hint.text = "Right-drag to orbit   ·   Scroll to zoom   /   Scenery has no Bullet collisions"
+	hint.text = "Right-drag to orbit   ·   Scroll to zoom   /   Truck contact ends the scenario"
 	hint.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
 	hint.position = Vector2(28, -108)
 	canvas.add_child(hint)
@@ -340,7 +350,46 @@ func _update_controls() -> void:
 	var detail := "Waiting for physics" if not connected else "%s · %.2f s" % [state.reason, state.simulation_time_s]
 	if Time.get_ticks_msec() < control_notice_until:
 		detail = control_notice
+	if state.get("terminal_result") != null:
+		control_display = "COMPLETED"
+		detail = "Target hit · %.2f s" % state.simulation_time_s
+	elif collision_failed:
+		detail = "Collision acknowledgement failed"
+	elif not pending_collision.is_empty():
+		detail = "Contact detected · waiting for confirmation"
 	control_label.text = "%s\n%s" % [control_display.capitalize(), detail]
+
+func _physics_process(_delta: float) -> void:
+	if capture_only or adapter == null:
+		return
+	var state: Dictionary = adapter.get_control_state()
+	if state.is_empty():
+		return
+	var episode_key := "%s/%s" % [state.physics_id, state.episode_id]
+	if episode_key != collision_episode:
+		collision_episode = episode_key
+		pending_collision = {}
+		collision_failed = false
+		collision_detector.reset()
+	if state.state != "running":
+		pending_collision = {}
+		return
+	var now := Time.get_ticks_msec()
+	if pending_collision.is_empty():
+		var pose: Dictionary = adapter.poll_collision_pose()
+		if not pose.is_empty():
+			pending_collision = collision_detector.check(pose)
+			if not pending_collision.is_empty():
+				pending_collision.event_id = "%s-%s-hit-%s" % [adapter.get_stats().controller_id, pose.source.episode_id, int(pose.source.step_index)]
+				collision_started_ms = now
+				collision_retry_ms = 0
+	if not pending_collision.is_empty() and now >= collision_retry_ms:
+		if now - collision_started_ms >= COLLISION_ACK_TIMEOUT_MS:
+			collision_failed = true
+			adapter.publish_control("stop")
+		else:
+			adapter.publish_collision(pending_collision)
+		collision_retry_ms = now + COLLISION_RETRY_MS
 
 func _process(_delta: float) -> void:
 	_update_controls()

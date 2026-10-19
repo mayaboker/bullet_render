@@ -35,7 +35,7 @@ func _process(_delta: float) -> bool:
 		for action: String in scene.control_buttons:
 			disabled[action] = scene.control_buttons[action].disabled
 		var report := {"state": scene.adapter.get_control_state(), "disabled": disabled,
-			"stats": scene.adapter.get_stats(), "position": [scene.drone.position.x, scene.drone.position.y, scene.drone.position.z]}
+			"stats": scene.adapter.get_stats(), "collision_failed": scene.collision_failed, "display": scene.control_display, "position": [scene.drone.position.x, scene.drone.position.y, scene.drone.position.z]}
 		var file := FileAccess.open(report_path, FileAccess.WRITE)
 		if file != null:
 			file.store_string(JSON.stringify(report))

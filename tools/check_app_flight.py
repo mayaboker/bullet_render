@@ -45,7 +45,9 @@ def main():
         recorder = yaml.safe_load((ROOT / 'configs/recorder.yaml').read_text())
         recorder.update(transport_config=str(temp / 'transport.json'), output_dir=str(temp / 'recordings'))
         for topic in recorder['topics']:
-            if topic['key'] == 'flight/drone_1/rc':
+            if topic['key'] == 'render/drone_1/collision':
+                topic['endpoint'] = transport['control_endpoint']
+            elif topic['key'] == 'flight/drone_1/rc':
                 topic['endpoint'] = transport['flight_command_endpoint']
             elif 'endpoint' in topic:
                 topic['endpoint'] = app_endpoint
@@ -105,7 +107,7 @@ def main():
             # Probe supports a transport override after the command/state paths.
             launch('godot', ['godot', '--path', str(ROOT / 'godot'), '--script', 'control_probe.gd', '--',
                              str(command_path), str(state_path), str(temp / 'transport.json')], ROOT)
-            wait(lambda: latest.get(MISSION_TOPIC, {}).get('phase') == 'READY' and snapshot().get('state', {}).get('state') == 'stopped', 'ready')
+            wait(lambda: latest.get(MISSION_TOPIC, {}).get('phase') == 'READY' and snapshot().get('state', {}).get('state') == 'stopped' and not snapshot().get('disabled', {}).get('start', True), 'ready')
             time.sleep(.2)
             command('start')
             wait(lambda: latest.get(MISSION_TOPIC, {}).get('phase') == 'LOS_APPROACH', 'takeoff, hover, post-hover detection and LOS', timeout=65)

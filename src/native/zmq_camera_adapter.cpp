@@ -74,13 +74,48 @@ bool valid_config(const Dictionary &d) {
         double(camera["fov_x_deg"]) < 180 &&
         int64_t(camera["width_px"]) * int64_t(camera["height_px"]) * 3 <= MAX_IMAGE_BYTES;
 }
-bool valid_source(const Dictionary &s, const Dictionary &pose) {
+bool valid_stamp(const Dictionary &s) {
     if (!shape(s, {"physics_id", "episode_id", "stream_id", "step_index", "simulation_time_s", "measurement_us"})) return false;
     for (const auto key : {"physics_id", "episode_id", "stream_id"}) if (!control_identity(s[key])) return false;
     for (const auto key : {"step_index", "measurement_us"}) if (!number(s[key], 0, MAX_SEQUENCE, true)) return false;
-    if (!number(s["simulation_time_s"], 0, 1e12)) return false;
-    for (const auto key : {"episode_id", "stream_id", "step_index", "simulation_time_s"}) if (s[key] != pose[key]) return false;
+    return number(s["simulation_time_s"], 0, 1e12);
+}
+bool valid_source(const Dictionary &s, const Dictionary &pose) {
+    if (!valid_stamp(s)) return false;
+    for (const auto key : {"episode_id", "stream_id", "step_index", "simulation_time_s"})
+        if (!pose.has(key) || s[key] != pose[key]) return false;
     return true;
+}
+Dictionary integer_stamp(const Dictionary &s) {
+    Dictionary result = s.duplicate();
+    for (const auto key : {"step_index", "measurement_us"}) result[key] = int64_t(s[key]);
+    return result;
+}
+bool valid_collision(const Dictionary &d) {
+    if (!shape(d, {"schema_version", "event_id", "controller_id", "issued_us", "source", "target_id", "drone_position_m"}) ||
+        !number(d["schema_version"], 1, 1, true) || !control_identity(d["event_id"]) || !control_identity(d["controller_id"]) ||
+        !number(d["issued_us"], 0, MAX_SEQUENCE, true) || d["source"].get_type() != Variant::DICTIONARY ||
+        !valid_stamp(d["source"]) || d["target_id"].get_type() != Variant::STRING || String(d["target_id"]) != "red_truck" ||
+        !vector(d["drone_position_m"], 3, 1e12)) return false;
+    const Dictionary source = d["source"];
+    return int64_t(d["issued_us"]) >= int64_t(source["measurement_us"]);
+}
+bool valid_end(const Dictionary &d) {
+    if (!shape(d, {"schema_version", "event_id", "collision", "final_source", "outcome", "reason", "ended_us"}) ||
+        !number(d["schema_version"], 1, 1, true) || !control_identity(d["event_id"]) ||
+        d["collision"].get_type() != Variant::DICTIONARY || !valid_collision(d["collision"]) ||
+        d["final_source"].get_type() != Variant::DICTIONARY || !valid_stamp(d["final_source"]) ||
+        d["outcome"].get_type() != Variant::STRING || String(d["outcome"]) != "success" ||
+        d["reason"].get_type() != Variant::STRING || String(d["reason"]) != "target_hit" ||
+        !number(d["ended_us"], 0, MAX_SEQUENCE, true)) return false;
+    const Dictionary collision = d["collision"], source = collision["source"], final_source = d["final_source"];
+    for (const auto key : {"physics_id", "episode_id", "stream_id"}) if (source[key] != final_source[key]) return false;
+    return d["event_id"] == collision["event_id"] &&
+        double(final_source["simulation_time_s"]) >= double(source["simulation_time_s"]) &&
+        int64_t(final_source["step_index"]) >= int64_t(source["step_index"]) &&
+        int64_t(final_source["measurement_us"]) >= int64_t(source["measurement_us"]) &&
+        int64_t(d["ended_us"]) >= int64_t(final_source["measurement_us"]) &&
+        int64_t(d["ended_us"]) >= int64_t(collision["issued_us"]);
 }
 bool valid_pose(const Dictionary &d) {
     Dictionary legacy = d.duplicate();
@@ -115,7 +150,7 @@ Dictionary parse(const std::string &raw) {
 
 struct ZmqCameraAdapter::Impl {
     std::mutex mutex;
-    std::string config_slot, pose_slot, state_slot;
+    std::string config_slot, pose_slot, collision_pose_slot, state_slot, collision_outgoing;
     Clock::time_point state_received{}, valid_state_received{};
     std::deque<std::pair<std::string, int64_t>> commands;
     std::string controller_id = std::to_string(getpid()) + "-" + std::to_string(Clock::now().time_since_epoch().count());
@@ -124,6 +159,8 @@ struct ZmqCameraAdapter::Impl {
     Clock::time_point pose_received{}, capture_received{};
     std::atomic<int64_t> invalid{0}, superseded{0};
     int64_t frames = 0, sequence_gaps = 0, stale = 0, last_sequence = -1, capture_sequence = -1;
+    int64_t collision_sequence = -1;
+    String collision_episode, collision_stream;
     int64_t frame_bytes = 0, busy_slots = 0, publication_drops = 0;
     bullet_msgs::FrameWriter images;
     bool running = false;
@@ -176,6 +213,14 @@ struct ZmqCameraAdapter::Impl {
                 std::deque<std::pair<std::string, int64_t>> outgoing;
                 { std::lock_guard lock(mutex); outgoing.swap(commands); }
                 for (const auto &[action, issued_ms] : outgoing) publish(action, issued_ms);
+                std::string collision;
+                { std::lock_guard lock(mutex); collision.swap(collision_outgoing); }
+                if (!collision.empty()) {
+                    constexpr char topic[] = "render/drone_1/collision";
+                    if (zmq_send(control, topic, sizeof(topic) - 1, ZMQ_SNDMORE | ZMQ_DONTWAIT) < 0 ||
+                        zmq_send(control, collision.data(), collision.size(), ZMQ_DONTWAIT) < 0)
+                        throw std::runtime_error(zmq_strerror(zmq_errno()));
+                }
                 zmq_pollitem_t item{socket, 0, ZMQ_POLLIN, 0};
                 int result = zmq_poll(&item, 1, 10);
                 if (result < 0) {
@@ -210,6 +255,7 @@ struct ZmqCameraAdapter::Impl {
                 if (is_config) config_slot = std::move(raw);
                 else {
                     if (!pose_slot.empty()) ++superseded;
+                    collision_pose_slot = raw;
                     pose_slot = std::move(raw);
                     pose_received = Clock::now();
                 }
@@ -233,6 +279,8 @@ void ZmqCameraAdapter::_bind_methods() {
     ClassDB::bind_method(D_METHOD("publish_frame", "pixels", "request"), &ZmqCameraAdapter::publish_frame);
     ClassDB::bind_method(D_METHOD("get_stats"), &ZmqCameraAdapter::get_stats);
     ClassDB::bind_method(D_METHOD("publish_control", "action"), &ZmqCameraAdapter::publish_control);
+    ClassDB::bind_method(D_METHOD("poll_collision_pose"), &ZmqCameraAdapter::poll_collision_pose);
+    ClassDB::bind_method(D_METHOD("publish_collision", "report"), &ZmqCameraAdapter::publish_collision);
     ClassDB::bind_method(D_METHOD("get_control_state"), &ZmqCameraAdapter::get_control_state);
     ClassDB::bind_method(D_METHOD("close"), &ZmqCameraAdapter::close);
 }
@@ -391,7 +439,7 @@ bool ZmqCameraAdapter::publish_frame(const PackedByteArray &pixels, const Dictio
             source["measurement_us"] = int64_t(source["measurement_us"]);
             source["step_index"] = int64_t(source["step_index"]);
             capture_ns = int64_t(source["measurement_us"]) * 1000;
-            source_json = JSON::stringify(source).utf8().get_data();
+            source_json = JSON::stringify(source, "", true, true).utf8().get_data();
         }
         const auto message = impl->images.write(pixels.ptr(), pixels.size(), capture_ns, source_json);
         if (message.empty()) { ++impl->busy_slots; return true; }
@@ -444,21 +492,74 @@ bool ZmqCameraAdapter::publish_control(const String &action) {
     return true;
 }
 
+Dictionary ZmqCameraAdapter::poll_collision_pose() {
+    const Dictionary state = get_control_state();
+    std::string raw;
+    { std::lock_guard lock(impl->mutex); raw.swap(impl->collision_pose_slot); }
+    if (raw.empty() || state.is_empty() || String(state["state"]) != "running") return {};
+    const Dictionary pose = parse(raw);
+    if (!valid_pose(pose) || !number(pose["schema_version"], 3, 3, true)) return {};
+    const Dictionary source = pose["source"];
+    const auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count();
+    const auto age_us = now_us - int64_t(source["measurement_us"]);
+    if (source["physics_id"] != state["physics_id"] || source["episode_id"] != state["episode_id"] ||
+        age_us < 0 || age_us > 1000000) return {};
+    const String episode = source["episode_id"], stream = source["stream_id"];
+    if (episode != impl->collision_episode || stream != impl->collision_stream) {
+        impl->collision_sequence = -1;
+        impl->collision_episode = episode;
+        impl->collision_stream = stream;
+    }
+    if (int64_t(pose["sequence"]) <= impl->collision_sequence) return {};
+    impl->collision_sequence = int64_t(pose["sequence"]);
+    return pose;
+}
+
+bool ZmqCameraAdapter::publish_collision(const Dictionary &report) {
+    if (!impl->running) return false;
+    Dictionary packet = report.duplicate(true);
+    packet["schema_version"] = int64_t(1);
+    packet["controller_id"] = String(impl->controller_id.c_str());
+    packet["issued_us"] = int64_t(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count());
+    if (packet.get("source", Variant()).get_type() != Variant::DICTIONARY) return false;
+    const Dictionary source = packet["source"];
+    if (!valid_stamp(source)) return false;
+    packet["source"] = integer_stamp(source);
+    if (!valid_collision(packet)) return false;
+    const auto raw = JSON::stringify(packet, "", true, true).utf8();
+    if (raw.length() > 4096) return false;
+    std::lock_guard lock(impl->mutex);
+    impl->collision_outgoing.assign(raw.get_data(), raw.length());
+    return true;
+}
+
 Dictionary ZmqCameraAdapter::get_control_state() {
     std::string raw;
     Clock::time_point received;
     { std::lock_guard lock(impl->mutex); raw.swap(impl->state_slot); received = impl->state_received; }
     if (!raw.empty()) {
         const auto state = parse(raw);
-        bool valid = raw.size() <= 4096 && shape(state, {"schema_version", "physics_id", "controller_id", "episode_id", "state", "reason", "simulation_time_s"});
+        Dictionary legacy = state.duplicate();
+        const bool v2 = number(state.get("schema_version", 0), 2, 2, true);
+        if (v2) legacy.erase("terminal_result");
+        bool valid = raw.size() <= 4096 && (!v2 || state.has("terminal_result")) && shape(legacy, {"schema_version", "physics_id", "controller_id", "episode_id", "state", "reason", "simulation_time_s"});
         if (valid) {
             const String mode = state["state"];
             const String reason = state["reason"];
-            valid = number(state["schema_version"], 1, 1, true) && control_identity(state["physics_id"]) && control_identity(state["episode_id"]) &&
+            valid = number(state["schema_version"], v2 ? 2 : 1, v2 ? 2 : 1, true) && control_identity(state["physics_id"]) && control_identity(state["episode_id"]) &&
                 (state["controller_id"].get_type() == Variant::NIL || control_identity(state["controller_id"])) &&
                 state["state"].get_type() == Variant::STRING && (mode == "running" || mode == "stopped" || mode == "error") &&
                 state["reason"].get_type() == Variant::STRING && reason.length() > 0 && reason.length() <= 256 &&
                 number(state["simulation_time_s"], 0, 1e12);
+        }
+        if (valid && v2 && state["terminal_result"].get_type() != Variant::NIL) {
+            valid = state["terminal_result"].get_type() == Variant::DICTIONARY;
+            if (valid) {
+                const Dictionary end = state["terminal_result"], final_source = end.get("final_source", Dictionary());
+                valid = valid_end(end) && String(state["state"]) == "stopped" && state["reason"] == end["reason"];
+                for (const auto key : {"physics_id", "episode_id", "simulation_time_s"})
+                    if (!final_source.has(key) || state[key] != final_source[key]) valid = false;
+            }
         }
         if (valid) { impl->control_state = state; impl->valid_state_received = received; impl->control_error = ""; }
         else { ++impl->invalid; impl->control_error = "Rejected invalid simulation state"; }
