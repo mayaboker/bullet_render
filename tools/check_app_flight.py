@@ -5,6 +5,7 @@ Uses isolated ports and temporary recordings. Run from the shared environment.
 import argparse
 from contextlib import ExitStack
 import json
+from math import degrees, isclose
 import os
 from pathlib import Path
 import signal
@@ -16,6 +17,7 @@ from mcap.reader import make_reader
 import yaml
 import zmq
 from bullet_msgs.flight import MISSION_TOPIC, FEEDBACK_TOPIC
+from bullet_msgs.los import LOS_TOPIC, validate_los
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -155,10 +157,17 @@ def main():
             wait(lambda: latest.get(FEEDBACK_TOPIC, {}).get('reason') == 'stop', 'explicit Stop')
             wait(lambda: len(list((temp / 'recordings').glob('*.mcap'))) == 2 and not list((temp / 'recordings').glob('*.partial')), 'second recording finalized')
             counts, poses, boxes = {}, {}, []
+            los_packets = []
+            mission_diagnostics = {}
             for path in (temp / 'recordings').glob('*.mcap'):
                 with path.open('rb') as stream:
                     for _, channel, message in make_reader(stream).iter_messages():
                         counts[channel.topic] = counts.get(channel.topic, 0) + 1
+                        if channel.topic == LOS_TOPIC.decode():
+                            los_packets.append(validate_los(json.loads(message.data)))
+                        elif channel.topic == MISSION_TOPIC.decode():
+                            packet = json.loads(message.data)
+                            mission_diagnostics[(packet['episode_id'], packet['measurement_us'])] = packet['diagnostics']
                         if channel.topic == 'render/drone_1/pose':
                             p = json.loads(message.data)
                             source = p['source']
@@ -166,6 +175,18 @@ def main():
                         elif channel.topic == 'tracking/front/bbox':
                             boxes.append(json.loads(message.data))
             assert all(counts.get(t, 0) > 0 for t in ('flight/drone_1/rc', 'flight/drone_1/feedback', 'app/drone_1/mission', 'tracking/front/bbox', 'camera/front/image', 'render/drone_1/pose')), counts
+            active_los = [p for p in los_packets if p['active'] and p['bearing_valid']]
+            assert len(active_los) >= 10, 'no active bearing telemetry in MCAP'
+            converted = 0
+            for packet in active_los:
+                episode = packet['source']['episode_id']
+                diagnostic = next((mission_diagnostics[(episode, packet['generated_us'] + offset)]
+                                   for offset in (0, -1, 1) if (episode, packet['generated_us'] + offset) in mission_diagnostics), None)
+                if diagnostic is not None:
+                    assert isclose(packet['elevation_deg'], degrees(diagnostic['elevation_rad']), abs_tol=1e-8)
+                    assert isclose(packet['azimuth_deg'], degrees(diagnostic['azimuth_rad']), abs_tol=1e-8)
+                    converted += 1
+            assert converted >= 10, 'could not associate degree/radian samples'
             matched = 0
             for box in boxes:
                 assert box['schema_version'] == 2
@@ -176,7 +197,7 @@ def main():
                     assert poses[key] == source['measurement_us']
                     matched += 1
             assert matched > 10, 'no exact image/bbox/pose source associations'
-            report = dict(exact_source_associations=matched, phases=phases, counts=counts, watchdog_reason='rc_expired', watchdog_latency_s=watchdog_latency_s, frozen_step=frozen, restart_requires_start=True, reset_verified=True)
+            report = dict(los_degree_samples_checked=converted, exact_source_associations=matched, phases=phases, counts=counts, watchdog_reason='rc_expired', watchdog_latency_s=watchdog_latency_s, frozen_step=frozen, restart_requires_start=True, reset_verified=True)
             (args.report_dir / 'report.json').write_text(json.dumps(report, indent=2))
             print(json.dumps(report, indent=2))
         finally:

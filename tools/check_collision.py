@@ -17,6 +17,7 @@ import yaml
 import zmq
 from bullet_msgs.flight import MISSION_TOPIC, FEEDBACK_TOPIC
 from bullet_msgs.scenario import END_TOPIC, COLLISION_TOPIC
+from bullet_msgs.los import LOS_TOPIC, validate_los
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -164,11 +165,17 @@ def main():
             wait(lambda: len(list((temp / 'recordings').glob('*.mcap'))) == 2 and not list((temp / 'recordings').glob('*.partial')), 'second completed recording finalized')
             counts = {}
             completed_in_bags = 0
+            completed_los_episodes = set()
             terminal_ids = set()
             for path in (temp / 'recordings').glob('*.mcap'):
                 with path.open('rb') as stream:
                     for _, channel, message in make_reader(stream).iter_messages():
                         counts[channel.topic] = counts.get(channel.topic, 0) + 1
+                        if channel.topic == LOS_TOPIC.decode():
+                            packet = validate_los(json.loads(message.data))
+                            if packet['mission_phase'] == 'COMPLETED':
+                                assert not packet['active'] and packet['optical_ttc_s'] is None
+                                completed_los_episodes.add(packet['source']['episode_id'])
                         if channel.topic == 'scenario/ended':
                             terminal_ids.add(json.loads(message.data)['event_id'])
                         elif channel.topic == 'app/drone_1/mission' and json.loads(message.data)['phase'] == 'COMPLETED':
@@ -176,9 +183,10 @@ def main():
             assert all(counts.get(t, 0) > 0 for t in ('flight/drone_1/rc', 'flight/drone_1/feedback', 'app/drone_1/mission', 'camera/front/image', 'render/drone_1/pose')), counts
             assert counts.get('scenario/ended') == 2 and len(terminal_ids) == 2, counts
             assert completed_in_bags >= 2, 'missing final app status'
+            assert len(completed_los_episodes) == 2, 'missing final inactive LOS packet'
             assert counts.get('render/drone_1/collision', 0) >= 4, counts
             report = dict(phases=phases, counts=counts, frozen_step=frozen, result=result,
-                          late_app_completed=True, reset_verified=True, dropped_first_report_recovered=True, screenshot=str(screenshot))
+                          late_app_completed=True, reset_verified=True, dropped_first_report_recovered=True, final_los_markers=len(completed_los_episodes), screenshot=str(screenshot))
             (args.report_dir / 'report.json').write_text(json.dumps(report, indent=2))
             print(json.dumps(report, indent=2))
         finally:

@@ -281,3 +281,18 @@ checks termination without requiring LOS tuning to navigate into the truck.
 Logs/report and a completion screenshot remain in `/tmp/bullet-collision/`;
 temporary recordings are removed. The separate square examples retain their
 legacy lifecycle and do not enable this stamped-pose collision flow.
+
+## LOS graph and MCAP topic
+
+The mission app publishes **tracking/front/los** on the existing port5558, and
+`configs/recorder.yaml` records it alongside the other app/physics streams.
+It contains bearing in **degrees**, LOS rate in **degrees/second**, TTC in seconds,
+fit validity/reason/residual, timestamps and mission/navigation state. Steady
+samples are30Hz; state changes are immediate. Existing mission diagnostics remain
+in radians. See [app telemetry fields](../bullet_app/README.md).
+
+The real-display checks validate the stream in MCAP:
+`tools/check_app_flight.py` compares sampled degrees with existing radian mission
+diagnostics, and `tools/check_collision.py` checks the final inactive LOS marker
+is saved within the250ms collision-finalization drain. Test bags are temporary;
+normal task recordings still save to `recordings/`.

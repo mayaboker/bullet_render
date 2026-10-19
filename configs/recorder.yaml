@@ -92,3 +92,13 @@ topics:
     schema: bullet_msgs:scenario_end.json
     # Unix arrival timestamp; ended_us is the host monotonic confirmation time.
     timestamp_source: receive
+  # Focused LOS telemetry: bearings in degrees, rates in degrees/s, TTC in seconds.
+  - key: tracking/front/los
+    # Strict versioned JSON; invalid or inactive estimates are null with validity flags.
+    input: json
+    # Shares the existing bullet_app bbox/mission publisher; no additional port.
+    endpoint: tcp://127.0.0.1:5558
+    # Includes TTC fit quality/reason, state, source stamps and navigation sequence.
+    schema: bullet_msgs:los_telemetry.json
+    # Unix MCAP arrival time; generated_us is monotonic and source carries simulation time.
+    timestamp_source: receive
