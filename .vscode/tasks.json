@@ -1,0 +1,56 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Workspace: Environment sync",
+      "type": "process",
+      "command": "uv",
+      "args": [
+        "sync",
+        "--locked",
+        "--all-packages",
+        "--all-extras",
+        "--all-groups"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Native: Configure",
+      "type": "process",
+      "command": "cmake",
+      "args": [
+        "--preset",
+        "debug"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "dependsOn": "Workspace: Environment sync"
+    },
+    {
+      "label": "Native: Build",
+      "type": "process",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "--preset",
+        "debug"
+      ],
+      "dependsOn": "Native: Configure",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$gcc"
+      ]
+    }
+  ]
+}

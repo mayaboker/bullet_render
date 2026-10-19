@@ -1,0 +1,215 @@
+# Bullet Render — native Godot / ZeroMQ camera
+
+This project is a member of the [Bullet workspace](../README.md). All six
+projects share `../.venv` and `../uv.lock`; run uv commands with the
+workspace flags below to retain every project and optional dependency.
+
+Godot renders a landscape and forward camera from `bullet_drone` ground-truth
+poses. The native C++ adapter receives JSON telemetry over loopback ZMQ TCP and
+publishes image descriptors over TCP, with RGB8 pixels in POSIX shared memory.
+Sibling `bullet_msgs` owns the shared schemas, wire contract and SHM reader.
+Sibling `bullet_app` provides the live camera/bounding-box preview with `--debug`.
+
+A parked red delivery truck sits **50 m ahead of the physics origin** (horizontal
+ground distance, Bullet X=50 m / Godot Z=−50 m), following the terrain slope. The
+drone spawn stays at its physics position. The default spectator view is wide
+enough to include both; right-drag or scroll to inspect the truck. Scenery,
+including the truck, is visual only and has no Bullet collision body.
+
+## Build
+
+Prerequisites on Ubuntu 24.04: Godot 4.7, GCC with C++20, CMake, Ninja, pkg-config,
+libzmq development headers (tested with 4.3.5), Python 3.12 and uv. No Rust build is
+needed. If libzmq headers are missing, install `libzmq3-dev` through your package
+manager. Godot-cpp remains pinned to Godot 4.5 stable and is fetched by CMake.
+
+```bash
+uv sync --locked --all-packages --all-extras --all-groups
+cmake --preset debug
+cmake --build --preset debug
+```
+
+Unchanged configure/build runs reuse the existing bindings and extension; real
+source, profile or build-setting changes still trigger the required rebuild.
+
+The output is `godot/bin/libzmq_camera.so`, linked to system libzmq. CMake imports
+the extension into Godot; a one-second frame delay avoids Godot's cold-import
+shutdown race (upstream issue #111048). Generated files remain ignored.
+
+Keep the sibling `bullet_msgs` checkout alongside this repository. Prepare consumers:
+
+```bash
+cd ../bullet_drone
+uv sync --locked --all-packages --all-extras --all-groups
+cd ../mcap_bagger
+uv sync --locked --all-packages --all-extras --all-groups
+cd ../bullet_app
+uv sync --locked --all-packages --all-extras --all-groups
+```
+
+## Launch
+
+Run these in separate terminals, from the indicated directories. The recorder
+waits for physics to report a running simulation before creating a file.
+
+```bash
+# mcap_bagger
+uv run --locked --all-packages --all-extras --all-groups mcap-bagger --config ../bullet_render/configs/recorder.yaml
+```
+
+```bash
+# bullet_render; NVIDIA PRIME offload verified on the RTX 5070 Laptop GPU
+__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia godot --path godot
+```
+
+```bash
+# bullet_drone
+uv run --locked --all-packages --all-extras --all-groups python -m examples.position_square.main \
+  --headless --render-config ../bullet_render/configs/physics.json
+```
+
+For PlotJuggler, run the workspace `Bullet: Plotter (live position)` task and connect
+its ZMQ Subscriber to TCP transport, address `127.0.0.1`, port `5555`, topic
+`render/drone_1/pose`, using JSON and `simulation_time_s` as the embedded timestamp. The workspace
+`Bullet: Run all` task opens renderer, physics, MCAP recorder, plotter and camera/bbox app in dedicated terminals;
+the renderer uses NVIDIA PRIME. MCAP recording is automatic; PlotJuggler needs its connection. `Bullet: Open tools` lets
+you prepare them before starting `Bullet: Position flight`.
+
+Use workspace task **Bullet: Physics + render + app** to start the square flight,
+Godot renderer, automatic MCAP recorder and camera/bbox app together in dedicated terminals.
+
+## Simulation toolbar
+
+All three physics example CLIs start **Stopped** and stay alive between runs.
+In Godot's bottom-left toolbar, the play triangle starts a fresh episode, the
+stop square ends the run while keeping its final pose, and the reset arrow
+restores the initial pose at time zero and waits. Normal mission completion also
+returns to Stopped. Click or tab to a button and press Enter/Space.
+
+Godot broadcasts commands on loopback TCP **5557**, with no acknowledgments or
+participant barrier. The toolbar shows actual physics state from telemetry, not
+an optimistic click result. It remains disabled until physics sees this Godot
+controller's heartbeat. A missed command may require another click. Three seconds
+without Godot's 500 ms heartbeat ends an active run; reconnecting never auto-starts.
+
+The held pose is republished once per second while stopped, including for late
+viewers. Physics steps and simulation time remain frozen. Errors end the episode
+and appear in status; Start/Reset attempts a fresh reset.
+
+The MCAP service creates one file when physics reports a running episode, including
+when it joins an ongoing run. Stop, Reset, mission completion, physics errors, or
+three seconds without valid physics state drains and closes the file. Reset does
+not open another file. Repeated Start keeps the current file. A closed or failed
+episode is never reopened by delayed state messages; the next episode gets a new
+file. Recording failures leave `.mcap.partial` files and do not stop physics. The
+manual recorder prompt remains available by omitting `--config`. Recording is best
+effort: waiting for running state and PUB/SUB delivery can miss initial/final samples.
+
+## Transport and interfaces
+
+`configs/transport.json` holds distinct loopback TCP endpoints for telemetry, images,
+and control (`control_endpoint`). Publishers bind;
+subscribers connect and automatically reconnect. No broker is needed.
+
+| Publisher | Endpoint | Topic and payload | Subscribers |
+| --- | --- | --- | --- |
+| Physics | `tcp://127.0.0.1:5555` | `render/drone_1/config`, JSON repeated every second | Godot |
+| Physics | Same port 5555 | `render/drone_1/pose`, JSON at 30 Hz simulation time | Godot, MCAP, PlotJuggler |
+| Godot | `tcp://127.0.0.1:5557` | `simulation/command` and `simulation/heartbeat`, JSON | Physics, future consumers |
+| Physics | Same port 5555 | `simulation/state`, JSON | Godot, future consumers |
+| Godot | `tcp://127.0.0.1:5556` | `camera/front/image`, SHM descriptor | MCAP, video viewer |
+
+Physics runs at 240 Hz. Its configured capture/pose rate remains 30 Hz; physics
+owns camera settings and cadence. Config/pose telemetry retains exactly two parts,
+topic and JSON. Image notifications are a single message containing exact topic
+plus NUL, little-endian uint32 JSON length, and descriptor JSON, with no pixels.
+The old IPC/socket-pixel wire format is replaced and all components must migrate
+together. Configurable TCP ports are supported; all image consumers must share
+the renderer's Linux host/user.
+
+Pose messages now use **schema version 2** and include
+`linear_velocity_m_s: [vx, vy, vz]`: Bullet world-frame ground-truth velocity in
+m/s, Z upward, from the same physics snapshot as position. PlotJuggler can plot
+`linear_velocity_m_s[0]`, `[1]`, and `[2]`; MCAP records the vector with the pose.
+Rebuild/restart the native renderer and restart physics/recorder together after
+updating the shared schema. Strict consumers reject old pose v1 or missing
+velocity. Existing MCAP files retain their original embedded schemas. Config,
+control, image versions and TCP endpoints are unchanged.
+
+Godot allocates three 0600 POSIX SHM slots after learning camera dimensions.
+Writers take nonblocking exclusive locks; readers take nonblocking shared locks
+and copy pixels before unlocking. Busy, incomplete, reused and missing slots are
+skipped, so neither recorder nor viewer blocks rendering. Unique sessions permit
+renderer restart. Normal close unlinks owned objects; abrupt kill can leave
+orphans requiring exact-session cleanup. See [bullet_msgs](../bullet_msgs/README.md)
+for the header layout, validation rules and cleanup instructions.
+
+`ZmqCameraAdapter` provides `start(transport_path)`, `poll_request()`,
+`publish_frame(pixels, request)`, `get_stats()` and idempotent `close()`.
+`publish_control(action)` only enqueues a local event; `get_control_state()` returns
+the latest valid physics state or an empty dictionary after three seconds without
+a valid state. Socket ownership remains on the native worker.
+Statistics add `shm_session`, `busy_slots` and `publication_drops`; `frames` counts
+accepted notification submissions, not consumer deliveries. Worker threads never
+access Godot objects. Camera dimensions remain fixed for a renderer run.
+
+Telemetry high-water marks remain 64 messages, image descriptors 8. Zero linger
+and nonblocking publication remain in place. The recorder uses `input: shm_image`,
+copies pixels into its bounded 64 MiB queue, and reports skipped SHM images.
+Malformed data and queue overflow fail recording rather than hiding accepted-data
+loss. ZMQ can also drop notifications before receipt, which counters cannot fully
+observe. Arrival-time MCAP does not provide exact image/pose association.
+
+Start the camera/bbox preview (or use workspace **Bullet: App (debug)**):
+
+```bash
+cd ../bullet_app
+uv run --locked --all-packages --all-extras --all-groups bullet-app --transport-config ../bullet_render/configs/transport.json --debug
+```
+
+The app supports one exact topic per process, dimensions from descriptors,
+bounding boxes and stream status, reconnect, and Q/Esc/window-close exit. Godot still performs
+GPU readback; scenery remains visual with no Bullet collision geometry.
+
+## Checks and benchmark
+
+```bash
+uv run --locked --all-packages --all-extras --all-groups pytest -q
+godot --headless --path godot --script test_frames.gd
+__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
+  godot --path godot --script test_scene.gd
+__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
+  uv run --locked --all-packages --all-extras --all-groups \
+  python tools/check_pipeline.py --seconds 60 --report-dir /tmp/bullet-zmq-check
+# Add --fault-checks for late recorder startup, physics pause, slow Godot and restart.
+# Check the automatic recorder service with Start, Stop, Reset and physics loss:
+__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
+  uv run --locked --all-packages --all-extras --all-groups \
+  python tools/check_recording_controls.py --report-dir /tmp/bullet-recording-controls
+```
+
+The pipeline check independently reads MCAP images/poses, checks camera bytes and
+arrival timestamps, and reports FPS, CPU usage (100% = one core), queue peak and
+last observed native counters. Logs and a camera preview remain in the report
+directory; temporary recordings are deleted. Mean capture/readback and publication
+timings are sampled in periodic Godot logs. The final snapshot may precede shutdown.
+
+Historical socket-pixel performance results are recorded in [BENCHMARK.md](BENCHMARK.md); they are not SHM measurements. The source rate
+caps delivered FPS at 30, and mission restart gaps reduce the full-run average.
+
+Migration validation results are recorded in sibling
+[plan 0023](../bullet_drone/plan/0023-zmq-tcp-shm.md). The real-render pipeline check
+writes its logs, independent MCAP readback report and camera PNG under the report
+directory. Full performance tuning is outside this migration.
+
+Simulation-control validation and limits are recorded in
+[plan 0024](../bullet_drone/plan/0024-godot-simulation-controls.md).
+
+### Bullet application detections
+
+The sibling `bullet_app` receives camera images, calls `los_tracking`, and publishes
+`tracking/front/bbox` JSON on loopback port 5558. The recorder profile records it
+with `bullet_msgs:bbox.json` during each episode. **Bullet: Physics + render + app**
+and **Bullet: Run all** launch the application in debug mode with bounding boxes.
+Run `uv sync --locked --all-packages --all-extras --all-groups` in `../bullet_app` before using these tasks; see the
+[application README](../bullet_app/README.md) for the standalone command.

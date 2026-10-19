@@ -1,0 +1,18 @@
+[project]
+name = "bullet-render"
+version = "0.2.0"
+description = "Native Godot ZeroMQ camera adapter and integration checks"
+requires-python = ">=3.12"
+dependencies = ["bullet-msgs"]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = ["pytest>=9,<10", "pyzmq>=27,<28", "jsonschema>=4,<5"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv.sources]
+bullet-msgs = { workspace = true }

@@ -1,0 +1,40 @@
+# Filename prefix; letters, digits, underscores or hyphens.
+project: bullet_landscape
+# Output directory relative to this YAML; created on start.
+output_dir: ../recordings
+# ZeroMQ transport profile relative to this YAML; loopback TCP telemetry and SHM descriptors.
+transport_config: transport.json
+# Exact topic list; no wildcard subscriptions.
+topics:
+  # Raw image publication key.
+  - key: camera/front/image
+    # SHM descriptor input; recorder copies pixels and adds Foxglove RawImage wrapper.
+    input: shm_image
+    # Fixed width in pixels; must match physics startup configuration.
+    width: 640
+    # Fixed height in pixels; must match physics startup configuration.
+    height: 480
+    # Three unsigned bytes per pixel in red/green/blue order.
+    encoding: rgb8
+    # Bytes per row, with no padding: width * 3.
+    step: 1920
+    # Logical camera identity stored in MCAP.
+    frame_id: front_camera
+  # Physics source pose key, published once per scheduled capture.
+  - key: render/drone_1/pose
+    # JSON object validated against the schema below.
+    input: json
+    # Shared schema packaged by the sibling bullet_msgs project.
+    schema: bullet_msgs:pose.json
+    # Use recorder Unix arrival time; simulation time remains inside payload.
+    timestamp_source: receive
+  # Red-target result for each image processed by bullet_app.
+  - key: tracking/front/bbox
+    # Two-part topic/JSON publication, independent of physics telemetry.
+    input: json
+    # bullet_app binds this loopback endpoint; default port is 5558.
+    endpoint: tcp://127.0.0.1:5558
+    # Pixel x/y/width/height or null, with source image identity.
+    schema: bullet_msgs:bbox.json
+    # Recorder Unix arrival time; capture_ns remains source monotonic time.
+    timestamp_source: receive
