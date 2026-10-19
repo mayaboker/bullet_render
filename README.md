@@ -296,3 +296,58 @@ The real-display checks validate the stream in MCAP:
 diagnostics, and `tools/check_collision.py` checks the final inactive LOS marker
 is saved within the250ms collision-finalization drain. Test bags are temporary;
 normal task recordings still save to `recordings/`.
+
+## Scenario starting position
+
+Use the **external RC** physics task, open **Scenario**, then **Pick position on
+landscape** and left-click any ground point in the full 500 × 500 m landscape.
+Right-drag or scroll to find a location; zoom out and orbit overhead to reach the
+whole landscape. UI clicks do not select ground. The panel shows Bullet X/Y;
+**World Z** is the absolute altitude in metres, matching the barometer frame.
+It is not height above terrain. Each ground selection automatically fills Z
+with the local triangle height plus 0.015 m clearance, rounded upward to the
+next millimetre. You can adjust Z afterward to start higher. Allowed world Z is
+0.015–500 m, with 0.001 m input steps; below-terrain starts remain blocked.
+
+Yellow marks the draft; green marks the confirmed applied spawn. **Apply** creates
+and previews a new stopped episode. The actual drone moves only when physics
+publishes its confirmed pose. **Start** and **Reset** reuse the applied position.
+Selection/Load/Apply are disabled while running; a pending Apply also blocks
+Start/Reset. Initialization failure retains the previous usable simulation.
+A request retries every 100 ms for 2 s, then shows unconfirmed while reconciling
+with authoritative physics status; a lost acknowledgement never implies success.
+Other physics examples retain their existing controls without spawn support.
+
+Set **Takeoff height (m)** to the climb above the initial barometer altitude
+(default 20 m, range 0.1–100 m). Apply confirms both the starting position and
+takeoff height; changes take effect in the next episode.
+
+Choose a custom name and **Save preset** to persist position and takeoff height in
+`user://spawn_scenarios.json` (Godot's per-user application data directory).
+**Load draft** never moves physics; Apply is explicit and rechecks the current
+terrain. Default `(0, 0, 0.015)` is read-only. Presets use versioned JSON and atomic
+replacement; existing v1 presets load with a 20 m takeoff height; invalid files/write failures are reported without replacing the
+last valid presets. They are local user data and are not checked into Git.
+
+Attitude starts at identity and velocities at zero. The app still warms sensors,
+arms, then climbs the **configured height above the initial barometer reading**
+and hovers for 3 s. With the default 20 m climb, Z=5 m gives a target near Z=25 m. Elevated starts can briefly fall
+before arming/thrust. The terrain collider is for picking only: landscape hills
+remain visual geometry rather than physical ground/contact obstacles.
+
+`simulation/spawn_request` shares lifecycle port 5557. Authoritative
+`simulation/spawn_state` repeats on telemetry port 5555 at 10 Hz, including while
+stopped, and the default recorder stores it in each running episode's MCAP.
+Stopped preview alone does not start a recording. Renderer restart recovers the
+applied configuration; restarting physics restores the default spawn.
+
+Checks (the integration needs a real graphics display):
+
+```sh
+godot --headless --path godot --script test_spawn.gd
+uv run --locked --all-packages --all-extras --all-groups python tools/check_spawn.py
+```
+
+The integration exercises a real screen click, Apply/Start/Reset, renderer
+restart, a selected 6 m takeoff and MCAP readback. Report, logs and a panel screenshot
+remain in `/tmp/bullet-spawn/`; integration bags are temporary.

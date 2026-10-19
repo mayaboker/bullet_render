@@ -52,7 +52,7 @@ topics:
   - key: flight/drone_1/feedback
     # Two-part topic/JSON on the default telemetry endpoint.
     input: json
-    # Source observation identity, barometer and ideal simulator attitude.
+    # Source, barometer, ideal attitude; v2 adds applied takeoff climb in metres.
     schema: bullet_msgs:flight_feedback.json
     # Unix arrival time; source.measurement_us preserves sensor measurement time.
     timestamp_source: receive
@@ -101,4 +101,12 @@ topics:
     # Includes TTC fit quality/reason, state, source stamps and navigation sequence.
     schema: bullet_msgs:los_telemetry.json
     # Unix MCAP arrival time; generated_us is monotonic and source carries simulation time.
+    timestamp_source: receive
+  # Applied initial position and latest Apply outcome, repeated at 10 Hz even stopped.
+  - key: simulation/spawn_state
+    # JSON on the default physics telemetry endpoint (5555).
+    input: json
+    # Physics/episode identity, named spawn, v2 takeoff climb in metres and acknowledgement.
+    schema: bullet_msgs:spawn_state.json
+    # Unix arrival time; the spawn is configuration rather than a sensor sample.
     timestamp_source: receive

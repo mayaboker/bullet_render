@@ -6,6 +6,7 @@ var close_after := 0
 var previous: Dictionary = {}
 var control_action := ""
 var control_sent := false
+var previous_spawn: Dictionary = {}
 var previous_control: Dictionary = {}
 
 func _initialize() -> void:
@@ -34,7 +35,14 @@ func _process(_delta: float) -> bool:
 	if control_state != previous_control:
 		print("PROBE ", JSON.stringify({"control_state": control_state}))
 		previous_control = control_state.duplicate()
-	if not control_sent and not control_action.is_empty() and not control_state.is_empty():
+	var spawn := adapter.get_spawn_state()
+	if spawn != previous_spawn:
+		print("PROBE ", JSON.stringify({"spawn_state": spawn}))
+		previous_spawn = spawn.duplicate(true)
+	if not control_sent and control_action == "spawn" and not spawn.is_empty():
+		control_sent = adapter.publish_spawn({"physics_id": spawn.physics_id, "episode_id": spawn.episode_id,
+			"request_id": "native-pick", "scenario_name": "Hill", "position_m": [12.0, -34.0, 56.789], "takeoff_height_m": 7.5})
+	if not control_sent and control_action != "spawn" and not control_action.is_empty() and not control_state.is_empty():
 		control_sent = adapter.publish_control(control_action)
 	if not busy:
 		var request := adapter.poll_request()

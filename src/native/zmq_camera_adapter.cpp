@@ -1,6 +1,7 @@
 #include "zmq_camera_adapter.h"
 #include <bullet_msgs/shm.hpp>
 #include <bullet_msgs/control.hpp>
+#include <bullet_msgs/spawn.hpp>
 #include <deque>
 #include <godot_cpp/classes/json.hpp>
 #include <godot_cpp/core/class_db.hpp>
@@ -61,6 +62,40 @@ bool vector(const Variant &v, int count, double bound) {
     if (array.size() != count) return false;
     for (int i = 0; i < count; ++i) if (!number(array[i], -bound, bound)) return false;
     return true;
+}
+bool spawn_name(const Variant &v) {
+    if (v.get_type() != Variant::STRING) return false;
+    const String name = v;
+    if (name.is_empty() || name.length() > 64 || name.strip_edges() != name) return false;
+    for (int64_t i = 0; i < name.length(); ++i) if (name[i] < 32) return false;
+    return true;
+}
+bool spawn_position(const Variant &v) {
+    if (!vector(v, 3, 500)) return false;
+    const Array p = v;
+    return number(p[0], -bullet_msgs::SPAWN_HORIZONTAL_LIMIT_M, bullet_msgs::SPAWN_HORIZONTAL_LIMIT_M) &&
+        number(p[1], -bullet_msgs::SPAWN_HORIZONTAL_LIMIT_M, bullet_msgs::SPAWN_HORIZONTAL_LIMIT_M) &&
+        number(p[2], bullet_msgs::SPAWN_MIN_ALTITUDE_M, bullet_msgs::SPAWN_MAX_ALTITUDE_M);
+}
+bool valid_takeoff_height(const Variant &v) {
+    return number(v, bullet_msgs::MIN_TAKEOFF_HEIGHT_M, bullet_msgs::MAX_TAKEOFF_HEIGHT_M);
+}
+bool valid_spawn_state(const Dictionary &d) {
+    Dictionary legacy = d.duplicate();
+    const bool v2 = number(d.get("schema_version", 0), 2, 2, true);
+    if (v2) {
+        if (!d.has("takeoff_height_m") || !valid_takeoff_height(d["takeoff_height_m"])) return false;
+        legacy.erase("takeoff_height_m");
+    }
+    if (!shape(legacy, {"schema_version", "physics_id", "controller_id", "episode_id", "scenario_name", "position_m", "request_id", "result", "reason"}) ||
+        !number(d["schema_version"], v2 ? 2 : 1, v2 ? 2 : 1, true) || !control_identity(d["physics_id"]) || !control_identity(d["episode_id"]) ||
+        (d["controller_id"].get_type() != Variant::NIL && !control_identity(d["controller_id"])) ||
+        (d["request_id"].get_type() != Variant::NIL && !control_identity(d["request_id"])) ||
+        !spawn_name(d["scenario_name"]) || !spawn_position(d["position_m"]) || d["result"].get_type() != Variant::STRING ||
+        d["reason"].get_type() != Variant::STRING) return false;
+    const String result = d["result"], reason = d["reason"];
+    return (result == "idle" || result == "applied" || result == "rejected") && reason.length() > 0 && reason.length() <= 256 &&
+        ((d["request_id"].get_type() == Variant::NIL) == (result == "idle"));
 }
 bool valid_config(const Dictionary &d) {
     if (!shape(d, {"schema_version", "stream_id", "camera", "fps"}) ||
@@ -150,11 +185,11 @@ Dictionary parse(const std::string &raw) {
 
 struct ZmqCameraAdapter::Impl {
     std::mutex mutex;
-    std::string config_slot, pose_slot, collision_pose_slot, state_slot, collision_outgoing;
-    Clock::time_point state_received{}, valid_state_received{};
+    std::string config_slot, pose_slot, collision_pose_slot, state_slot, collision_outgoing, spawn_slot, spawn_outgoing;
+    Clock::time_point state_received{}, valid_state_received{}, spawn_received{}, valid_spawn_received{};
     std::deque<std::pair<std::string, int64_t>> commands;
     std::string controller_id = std::to_string(getpid()) + "-" + std::to_string(Clock::now().time_since_epoch().count());
-    Dictionary control_state;
+    Dictionary control_state, spawn_state;
     String control_error;
     Clock::time_point pose_received{}, capture_received{};
     std::atomic<int64_t> invalid{0}, superseded{0};
@@ -184,6 +219,7 @@ struct ZmqCameraAdapter::Impl {
                 zmq_setsockopt(socket, ZMQ_RCVHWM, &TELEMETRY_HWM, sizeof(TELEMETRY_HWM)) ||
                 zmq_setsockopt(socket, ZMQ_MAXMSGSIZE, &max_size, sizeof(max_size)) ||
                 zmq_setsockopt(socket, ZMQ_SUBSCRIBE, "render/drone_1/", 15) ||
+                zmq_setsockopt(socket, ZMQ_SUBSCRIBE, bullet_msgs::SPAWN_STATE_TOPIC, sizeof(bullet_msgs::SPAWN_STATE_TOPIC) - 1) ||
                 zmq_setsockopt(socket, ZMQ_SUBSCRIBE, bullet_msgs::STATE_TOPIC, sizeof(bullet_msgs::STATE_TOPIC) - 1) ||
                 zmq_connect(socket, endpoint.c_str())) throw std::runtime_error(zmq_strerror(zmq_errno()));
             control = zmq_socket(context, ZMQ_PUB);
@@ -221,6 +257,14 @@ struct ZmqCameraAdapter::Impl {
                         zmq_send(control, collision.data(), collision.size(), ZMQ_DONTWAIT) < 0)
                         throw std::runtime_error(zmq_strerror(zmq_errno()));
                 }
+                std::string spawn;
+                { std::lock_guard lock(mutex); spawn.swap(spawn_outgoing); }
+                if (!spawn.empty()) {
+                    const auto &topic = bullet_msgs::SPAWN_REQUEST_TOPIC;
+                    if (zmq_send(control, topic, sizeof(topic) - 1, ZMQ_SNDMORE | ZMQ_DONTWAIT) < 0 ||
+                        zmq_send(control, spawn.data(), spawn.size(), ZMQ_DONTWAIT) < 0)
+                        throw std::runtime_error(zmq_strerror(zmq_errno()));
+                }
                 zmq_pollitem_t item{socket, 0, ZMQ_POLLIN, 0};
                 int result = zmq_poll(&item, 1, 10);
                 if (result < 0) {
@@ -249,8 +293,10 @@ struct ZmqCameraAdapter::Impl {
                 if (malformed || parts != 2) { ++invalid; continue; }
                 const bool is_config = topic == "render/drone_1/config";
                 const bool is_state = topic == bullet_msgs::STATE_TOPIC;
-                if (!is_config && !is_state && topic != "render/drone_1/pose") continue;
+                const bool is_spawn = topic == bullet_msgs::SPAWN_STATE_TOPIC;
+                if (!is_spawn && !is_config && !is_state && topic != "render/drone_1/pose") continue;
                 std::lock_guard lock(mutex);
+                if (is_spawn) { spawn_slot = std::move(raw); spawn_received = Clock::now(); continue; }
                 if (is_state) { state_slot = std::move(raw); state_received = Clock::now(); continue; }
                 if (is_config) config_slot = std::move(raw);
                 else {
@@ -282,6 +328,8 @@ void ZmqCameraAdapter::_bind_methods() {
     ClassDB::bind_method(D_METHOD("poll_collision_pose"), &ZmqCameraAdapter::poll_collision_pose);
     ClassDB::bind_method(D_METHOD("publish_collision", "report"), &ZmqCameraAdapter::publish_collision);
     ClassDB::bind_method(D_METHOD("get_control_state"), &ZmqCameraAdapter::get_control_state);
+    ClassDB::bind_method(D_METHOD("publish_spawn", "request"), &ZmqCameraAdapter::publish_spawn);
+    ClassDB::bind_method(D_METHOD("get_spawn_state"), &ZmqCameraAdapter::get_spawn_state);
     ClassDB::bind_method(D_METHOD("close"), &ZmqCameraAdapter::close);
 }
 
@@ -566,4 +614,43 @@ Dictionary ZmqCameraAdapter::get_control_state() {
     }
     if (!impl->running || std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - impl->valid_state_received).count() > bullet_msgs::HEARTBEAT_TIMEOUT_MS) return {};
     return impl->control_state;
+}
+
+
+bool ZmqCameraAdapter::publish_spawn(const Dictionary &request) {
+    Dictionary legacy = request.duplicate();
+    legacy.erase("takeoff_height_m");
+    const Variant height = request.get("takeoff_height_m", bullet_msgs::DEFAULT_TAKEOFF_HEIGHT_M);
+    if (!impl->running || !valid_takeoff_height(height) || !shape(legacy, {"physics_id", "episode_id", "request_id", "scenario_name", "position_m"}) ||
+        !control_identity(request["physics_id"]) || !control_identity(request["episode_id"]) || !control_identity(request["request_id"]) ||
+        !spawn_name(request["scenario_name"]) || !spawn_position(request["position_m"])) return false;
+    Dictionary packet = request.duplicate(true);
+    packet["schema_version"] = int64_t(2);
+    packet["takeoff_height_m"] = height;
+    packet["controller_id"] = String(impl->controller_id.c_str());
+    packet["issued_ms"] = int64_t(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count());
+    const auto raw = JSON::stringify(packet, "", true, true).utf8();
+    if (raw.length() > 4096) return false;
+    std::lock_guard lock(impl->mutex);
+    impl->spawn_outgoing.assign(raw.get_data(), raw.length());
+    return true;
+}
+
+Dictionary ZmqCameraAdapter::get_spawn_state() {
+    const Dictionary control = get_control_state();
+    std::string raw;
+    Clock::time_point received;
+    { std::lock_guard lock(impl->mutex); raw.swap(impl->spawn_slot); received = impl->spawn_received; }
+    if (!raw.empty()) {
+        const auto state = parse(raw);
+        if (raw.size() <= 4096 && valid_spawn_state(state)) {
+            impl->spawn_state = state;
+            impl->valid_spawn_received = received;
+        } else ++impl->invalid;
+    }
+    if (!impl->running || control.is_empty() || impl->spawn_state.is_empty() ||
+        std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - impl->valid_spawn_received).count() > bullet_msgs::SPAWN_STATE_TIMEOUT_MS) return {};
+    for (const auto key : {"physics_id", "episode_id", "controller_id"})
+        if (impl->spawn_state[key] != control[key]) return {};
+    return impl->spawn_state;
 }

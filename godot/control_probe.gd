@@ -27,6 +27,25 @@ func _process(_delta: float) -> bool:
 		if command is Dictionary and command.get("sequence", -1) != last_command:
 			last_command = command.get("sequence", -1)
 			var action: String = command.get("action", "")
+			var panel = scene.spawn_panel
+			if action == "spawn_pick":
+				panel.show()
+				panel.takeoff.value = command.get("takeoff_height_m", 20.0)
+				panel.preset_name.text = "Integration test"
+				panel._begin_pick()
+				var event := InputEventMouseButton.new()
+				event.button_index = MOUSE_BUTTON_LEFT
+				event.pressed = true
+				event.position = scene.spectator.unproject_position(scene.Frames.position(command.get("position_m", [10, 5, 0])))
+				root.push_input(event)
+			elif action == "spawn_apply":
+				panel.apply_button.pressed.emit()
+			elif action == "spawn_screenshot":
+				await RenderingServer.frame_post_draw
+				var saved := root.get_texture().get_image().save_png(command.path)
+				var done := FileAccess.open(command.path + ".done", FileAccess.WRITE)
+				done.store_string(str(saved))
+				done.close()
 			if scene.control_buttons.has(action) and not scene.control_buttons[action].disabled:
 				scene.control_buttons[action].pressed.emit()
 	var now := Time.get_ticks_msec()
@@ -35,6 +54,9 @@ func _process(_delta: float) -> bool:
 		for action: String in scene.control_buttons:
 			disabled[action] = scene.control_buttons[action].disabled
 		var report := {"state": scene.adapter.get_control_state(), "disabled": disabled,
+			"spawn": scene.adapter.get_spawn_state(), "draft": scene.spawn_panel.draft,
+			"spawn_pending": scene.spawn_panel.pending, "spawn_message": scene.spawn_panel.message.text,
+			"spawn_apply_disabled": scene.spawn_panel.apply_button.disabled, "terrain_height": scene.spawn_panel.terrain_height,
 			"stats": scene.adapter.get_stats(), "collision_failed": scene.collision_failed, "display": scene.control_display, "position": [scene.drone.position.x, scene.drone.position.y, scene.drone.position.z]}
 		var file := FileAccess.open(report_path, FileAccess.WRITE)
 		if file != null:

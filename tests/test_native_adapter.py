@@ -379,3 +379,51 @@ def test_pose_velocity_required_and_validated(probe):
     result = native.capture(1)
     assert result['success'] and result['stats']['frames'] == 2
     assert result['linear_velocity_m_s'] == [1.25, -2.5, 0.75]
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_native_spawn_contract_topic_filtering_identity_and_expiry(probe, tmp_path, version):
+    from bullet_msgs.spawn import validate_request, STATE_TOPIC, REQUEST_TOPIC
+    native = probe(control_action='spawn')
+    profile = json.loads(next(tmp_path.glob('*.json')).read_text())
+    with native.image_socket.context.socket(zmq.SUB) as controller:
+        controller.setsockopt(zmq.LINGER, 0)
+        controller.setsockopt(zmq.SUBSCRIBE, b'simulation/')
+        controller.connect(profile['control_endpoint'])
+        assert controller.poll(5000)
+        _, payload = controller.recv_multipart()
+        owner = json.loads(payload)['controller_id']
+        state = dict(schema_version=1, physics_id='physics', controller_id=owner,
+                     episode_id='episode', state='stopped', reason='startup', simulation_time_s=0)
+        Publisher(native.settings.socket, 'simulation/state').put(json.dumps(state))
+        native.event(lambda e: e.get('control_state', {}).get('state') == 'stopped')
+        packet = dict(schema_version=1, physics_id='physics', controller_id=owner, episode_id='episode',
+                      scenario_name='Default', position_m=[0, 0, .015], request_id=None, result='idle', reason='startup')
+        if version == 2:
+            packet.update(schema_version=2, takeoff_height_m=7.5)
+        Publisher(native.settings.socket, STATE_TOPIC.decode()+'/suffix').put(json.dumps(packet))
+        time.sleep(.1)
+        # Suffix ignored: only heartbeats so far.
+        while controller.poll(0):
+            assert controller.recv_multipart()[0] != REQUEST_TOPIC
+        Publisher(native.settings.socket, STATE_TOPIC.decode()).put(json.dumps(dict(packet, episode_id='other')))
+        time.sleep(.1)
+        while controller.poll(0):
+            assert controller.recv_multipart()[0] != REQUEST_TOPIC
+        Publisher(native.settings.socket, STATE_TOPIC.decode()).put(json.dumps(packet))
+        assert native.event(lambda e: e.get('spawn_state', {}).get('episode_id') == 'episode')['spawn_state'] == packet
+        deadline = time.monotonic() + 5
+        request = None
+        while time.monotonic() < deadline and request is None:
+            assert controller.poll(5000)
+            topic, payload = controller.recv_multipart()
+            if topic == REQUEST_TOPIC:
+                request = validate_request(json.loads(payload))
+        assert request['controller_id'] == owner
+        assert request['schema_version'] == 2 and request['takeoff_height_m'] == 7.5
+        assert request['position_m'] == [12, -34, 56.789]
+        assert request['physics_id'] == 'physics' and request['episode_id'] == 'episode'
+        Publisher(native.settings.socket, STATE_TOPIC.decode()).put(json.dumps(dict(packet, position_m=[0, 0, -1])))
+        native.event(lambda e: e.get('invalid', 0) > 0)
+        # Invalid advertisements do not refresh the last valid status's lifetime.
+        native.event(lambda e: e.get('spawn_state') == {})

@@ -1,6 +1,7 @@
 extends Node3D
 
 const Frames = preload("res://frames.gd")
+const SpawnPanel = preload("res://spawn_panel.gd")
 const TruckCollision = preload("res://truck_collision.gd")
 const COLLISION_RETRY_MS := 100
 const COLLISION_ACK_TIMEOUT_MS := 1000
@@ -10,6 +11,7 @@ const STALE_MS := 1000
 # Horizontal metres from the physics origin, in Godot's X/Z ground plane.
 const TRUCK_POSITION_M := Vector2(0.0, -50.0)
 const TRUCK_CLEARANCE_M := 6.0
+var spawn_panel: PanelContainer
 var collision_detector: RefCounted
 var pending_collision: Dictionary = {}
 var collision_started_ms := 0
@@ -60,6 +62,7 @@ func _ready() -> void:
 	fps_started = Time.get_ticks_msec()
 	adapter = ZmqCameraAdapter.new()
 	add_child(adapter)
+	spawn_panel.setup(self, spectator, adapter)
 	if not capture_only:
 		var transport_path := ProjectSettings.globalize_path(transport_config_path)
 		if not adapter.start(transport_path):
@@ -133,6 +136,14 @@ func _world() -> void:
 	ground_material.shader = preload("res://ground.gdshader")
 	terrain.material_override = ground_material
 	add_child(terrain)
+	# Picking only: isolated from the truck contact layer and all physics response.
+	var terrain_body := StaticBody3D.new()
+	terrain_body.collision_layer = 2
+	terrain_body.collision_mask = 0
+	var terrain_shape := CollisionShape3D.new()
+	terrain_shape.shape = terrain.mesh.create_trimesh_shape()
+	terrain_body.add_child(terrain_shape)
+	terrain.add_child(terrain_body)
 	_path()
 	_truck()
 	var rng := RandomNumberGenerator.new()
@@ -240,7 +251,7 @@ func _cameras() -> void:
 			var motor := mesh_node(drone, prop, Vector3(x, 0.04, z), Color("e1e8db"))
 			motor.layers = 2
 	spectator = Camera3D.new()
-	spectator.far = 900
+	spectator.far = 1500
 	add_child(spectator)
 	spectator.current = true
 	viewport = SubViewport.new()
@@ -330,8 +341,18 @@ func _ui() -> void:
 	control_label.add_theme_font_size_override("font_size", 16)
 	control_label.modulate = Color("d0e0db")
 	toolbar.add_child(control_label)
+	spawn_panel = SpawnPanel.new()
+	canvas.add_child(spawn_panel)
+	spawn_panel.hide()
+	var scenario_button := Button.new()
+	scenario_button.text = "Scenario"
+	scenario_button.custom_minimum_size = Vector2(100, 48)
+	scenario_button.pressed.connect(func(): spawn_panel.visible = not spawn_panel.visible)
+	toolbar.add_child(scenario_button)
 
 func _send_control(action: String) -> void:
+	if not spawn_panel.pending.is_empty() and action != "stop":
+		return
 	if adapter == null or not adapter.publish_control(action):
 		control_notice = "Could not send command"
 	else:
@@ -346,6 +367,11 @@ func _update_controls() -> void:
 	control_buttons.start.disabled = not ready or running
 	control_buttons.stop.disabled = not ready or not running
 	control_buttons.reset.disabled = not ready
+	var spawn: Dictionary = {} if capture_only or adapter == null else adapter.get_spawn_state()
+	spawn_panel.update_state(state, spawn, "" if adapter == null else String(adapter.get_stats().controller_id))
+	if not spawn_panel.pending.is_empty():
+		control_buttons.start.disabled = true
+		control_buttons.reset.disabled = true
 	control_display = String(state.state).to_upper() if connected else "DISCONNECTED"
 	var detail := "Waiting for physics" if not connected else "%s · %.2f s" % [state.reason, state.simulation_time_s]
 	if Time.get_ticks_msec() < control_notice_until:
@@ -360,6 +386,7 @@ func _update_controls() -> void:
 	control_label.text = "%s\n%s" % [control_display.capitalize(), detail]
 
 func _physics_process(_delta: float) -> void:
+	spawn_panel.physics_update()
 	if capture_only or adapter == null:
 		return
 	var state: Dictionary = adapter.get_control_state()
@@ -461,7 +488,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_UP:
 			distance = maxf(2, distance * 0.85)
 		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			distance = minf(300, distance * 1.15)
+			distance = minf(650, distance * 1.15)
 	elif event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		yaw -= event.relative.x * 0.005
 		pitch = clampf(pitch + event.relative.y * 0.005, 0.05, 1.45)
