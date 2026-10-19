@@ -64,8 +64,8 @@ __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia godot --path godot
 
 ```bash
 # bullet_drone
-uv run --locked --all-packages --all-extras --all-groups python -m examples.position_square.main \
-  --headless --render-config ../bullet_render/configs/physics.json
+uv run --locked --all-packages --all-extras --all-groups python -m examples.external_rc.main \
+  --render-config ../bullet_render/configs/physics.json
 ```
 
 For PlotJuggler, run the workspace `Bullet: Plotter (live position)` task and connect
@@ -75,19 +75,19 @@ its ZMQ Subscriber to TCP transport, address `127.0.0.1`, port `5555`, topic
 the renderer uses NVIDIA PRIME. MCAP recording is automatic; PlotJuggler needs its connection. `Bullet: Open tools` lets
 you prepare them before starting `Bullet: Position flight`.
 
-Use workspace task **Bullet: Physics + render + app** to start the square flight,
+Use workspace task **Bullet: Physics + render + app** to start app-owned takeoff/LOS physics,
 Godot renderer, automatic MCAP recorder and camera/bbox app together in dedicated terminals.
 
 ## Simulation toolbar
 
-All three physics example CLIs start **Stopped** and stay alive between runs.
+All four physics example CLIs start **Stopped** and stay alive between runs.
 In Godot's bottom-left toolbar, the play triangle starts a fresh episode, the
 stop square ends the run while keeping its final pose, and the reset arrow
 restores the initial pose at time zero and waits. Normal mission completion also
 returns to Stopped. Click or tab to a button and press Enter/Space.
 
-Godot broadcasts commands on loopback TCP **5557**, with no acknowledgments or
-participant barrier. The toolbar shows actual physics state from telemetry, not
+Godot broadcasts commands on loopback TCP **5557**, and physics acknowledges actual lifecycle state. The external-RC example also
+requires fresh app readiness before Start. The toolbar shows actual physics state from telemetry, not
 an optimistic click result. It remains disabled until physics sees this Godot
 controller's heartbeat. A missed command may require another click. Three seconds
 without Godot's 500 ms heartbeat ends an active run; reconnecting never auto-starts.
@@ -164,7 +164,8 @@ Start the camera/bbox preview (or use workspace **Bullet: App (debug)**):
 
 ```bash
 cd ../bullet_app
-uv run --locked --all-packages --all-extras --all-groups bullet-app --transport-config ../bullet_render/configs/transport.json --debug
+uv run --locked --all-packages --all-extras --all-groups bullet-app --transport-config ../bullet_render/configs/transport.json \
+  --mission-config ../los_tracking/examples/bullet_profile.json --debug
 ```
 
 The app supports one exact topic per process, dimensions from descriptors,
@@ -213,3 +214,25 @@ with `bullet_msgs:bbox.json` during each episode. **Bullet: Physics + render + a
 and **Bullet: Run all** launch the application in debug mode with bounding boxes.
 Run `uv sync --locked --all-packages --all-extras --all-groups` in `../bullet_app` before using these tasks; see the
 [application README](../bullet_app/README.md) for the standalone command.
+
+## App flight verification
+
+The combined tasks launch the app with `--mission-config
+../los_tracking/examples/bullet_profile.json`. Wait for app READY, then press
+Godot Start: warmup, arm, climb 20 m relative to the initial barometer, settle
+for 3 s and wait for a fresh post-hover bbox before LOS. Missing bbox times out
+after 5 s; expired RC or LOS faults freeze physics. No collision or landing
+is inferred. See [app mission details](../bullet_app/README.md). The separate
+Position flight task still runs the square.
+
+With a real graphics display, run the isolated-port check:
+
+```bash
+uv run --locked --all-packages --all-extras --all-groups python tools/check_app_flight.py
+```
+
+It launches physics, app, Godot and MCAP, checks the mission through LOS, kills
+the app to verify the expiry watchdog freezes physics, and reads back the bag.
+Logs/report are retained in `/tmp/bullet-app-flight`; temporary bags are removed.
+The native adapter preserves source pose/feedback identity in descriptor v2,
+using the measurement timestamp for capture_ns; binary SHM remains v1.

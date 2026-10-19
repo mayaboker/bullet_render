@@ -38,3 +38,39 @@ topics:
     schema: bullet_msgs:bbox.json
     # Recorder Unix arrival time; capture_ns remains source monotonic time.
     timestamp_source: receive
+  # Requested RC intent, including lease identity and monotonic expiry.
+  - key: flight/drone_1/rc
+    # Strict shared JSON contract, no pixel data.
+    input: json
+    # App flight publisher; distinct from bbox/status port.
+    endpoint: tcp://127.0.0.1:5559
+    # All 18 PWM channels, active flag and 100 ms maximum validity.
+    schema: bullet_msgs:flight_rc.json
+    # Unix arrival time for MCAP; issued_us is local monotonic time.
+    timestamp_source: receive
+  # Applied command acknowledgement and sensor feedback, without XY truth.
+  - key: flight/drone_1/feedback
+    # Two-part topic/JSON on the default telemetry endpoint.
+    input: json
+    # Source observation identity, barometer and ideal simulator attitude.
+    schema: bullet_msgs:flight_feedback.json
+    # Unix arrival time; source.measurement_us preserves sensor measurement time.
+    timestamp_source: receive
+  # Platform startup advertisement, repeated once per second.
+  - key: flight/drone_1/config
+    # Two-part topic/JSON on the default telemetry endpoint.
+    input: json
+    # Mass, thrust authority, mappings, camera and timing compatibility.
+    schema: bullet_msgs:flight_config.json
+    # Unix arrival time; this packet has no sensor measurement.
+    timestamp_source: receive
+  # App phase, failure reason and LOS bearing/rate/TTC diagnostics.
+  - key: app/drone_1/mission
+    # Two-part JSON publication independent of physics telemetry.
+    input: json
+    # Shares the app bbox publisher; permits one recorder to use multiple ports.
+    endpoint: tcp://127.0.0.1:5558
+    # Mission phase, countdowns and LOS diagnostics.
+    schema: bullet_msgs:mission.json
+    # Unix arrival time; simulation_time_s is the mission clock.
+    timestamp_source: receive

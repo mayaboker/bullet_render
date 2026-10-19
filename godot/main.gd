@@ -37,6 +37,8 @@ var control_display := "DISCONNECTED"
 var control_notice := ""
 var control_notice_until := 0
 
+@export var transport_config_path := "res://../configs/transport.json"
+
 func _ready() -> void:
 	Engine.max_fps = 90
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
@@ -49,7 +51,7 @@ func _ready() -> void:
 	adapter = ZmqCameraAdapter.new()
 	add_child(adapter)
 	if not capture_only:
-		var transport_path := ProjectSettings.globalize_path("res://../configs/transport.json")
+		var transport_path := ProjectSettings.globalize_path(transport_config_path)
 		if not adapter.start(transport_path):
 			get_tree().quit(1)
 			return

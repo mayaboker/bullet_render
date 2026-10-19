@@ -74,10 +74,24 @@ bool valid_config(const Dictionary &d) {
         double(camera["fov_x_deg"]) < 180 &&
         int64_t(camera["width_px"]) * int64_t(camera["height_px"]) * 3 <= MAX_IMAGE_BYTES;
 }
+bool valid_source(const Dictionary &s, const Dictionary &pose) {
+    if (!shape(s, {"physics_id", "episode_id", "stream_id", "step_index", "simulation_time_s", "measurement_us"})) return false;
+    for (const auto key : {"physics_id", "episode_id", "stream_id"}) if (!control_identity(s[key])) return false;
+    for (const auto key : {"step_index", "measurement_us"}) if (!number(s[key], 0, MAX_SEQUENCE, true)) return false;
+    if (!number(s["simulation_time_s"], 0, 1e12)) return false;
+    for (const auto key : {"episode_id", "stream_id", "step_index", "simulation_time_s"}) if (s[key] != pose[key]) return false;
+    return true;
+}
 bool valid_pose(const Dictionary &d) {
-    if (!shape(d, {"schema_version", "stream_id", "drone_id", "episode_id", "sequence", "publisher_drops",
+    Dictionary legacy = d.duplicate();
+    const bool stamped = number(d.get("schema_version", 0), 3, 3, true);
+    if (stamped) {
+        if (d.get("source", Variant()).get_type() != Variant::DICTIONARY || !valid_source(d["source"], d)) return false;
+        legacy.erase("source");
+    }
+    if (!shape(legacy, {"schema_version", "stream_id", "drone_id", "episode_id", "sequence", "publisher_drops",
                   "step_index", "simulation_time_s", "position_m", "orientation_xyzw", "linear_velocity_m_s"}) ||
-        !number(d["schema_version"], 2, 2, true) || !text(d["stream_id"]) ||
+        !number(d["schema_version"], stamped ? 3 : 2, stamped ? 3 : 2, true) || !text(d["stream_id"]) ||
         d["drone_id"].get_type() != Variant::STRING || String(d["drone_id"]) != "drone_1" ||
         !text(d["episode_id"]) || !number(d["simulation_time_s"], 0, 1e12) ||
         !vector(d["position_m"], 3, 1e9) || !vector(d["orientation_xyzw"], 4, 1) ||
@@ -231,7 +245,9 @@ bool ZmqCameraAdapter::start(const String &transport_path) {
         const auto file = FileAccess::open(transport_path, FileAccess::READ);
         if (file.is_null()) throw std::runtime_error("cannot read transport profile");
         const Dictionary profile = parse(file->get_as_text().utf8().get_data());
-        if (!shape(profile, {"telemetry_endpoint", "image_endpoint", "control_endpoint"})) throw std::runtime_error("invalid transport profile");
+        Dictionary legacy_profile = profile.duplicate();
+        legacy_profile.erase("flight_command_endpoint");
+        if (!shape(legacy_profile, {"telemetry_endpoint", "image_endpoint", "control_endpoint"})) throw std::runtime_error("invalid transport profile");
         for (const auto key : {"telemetry_endpoint", "image_endpoint", "control_endpoint"}) {
             const auto endpoint = String(profile[key]).utf8();
             if (profile[key].get_type() != Variant::STRING ||
@@ -240,6 +256,14 @@ bool ZmqCameraAdapter::start(const String &transport_path) {
         }
         if (profile["telemetry_endpoint"] == profile["image_endpoint"] ||
             profile["control_endpoint"] == profile["image_endpoint"] || profile["control_endpoint"] == profile["telemetry_endpoint"]) throw std::runtime_error("endpoints must differ");
+        if (profile.has("flight_command_endpoint")) {
+            const auto endpoint = String(profile["flight_command_endpoint"]).utf8();
+            if (profile["flight_command_endpoint"].get_type() != Variant::STRING ||
+                !bullet_msgs::valid_endpoint(std::string_view(endpoint.get_data(), endpoint.length())))
+                throw std::runtime_error("invalid flight command endpoint");
+            for (const auto key : {"telemetry_endpoint", "image_endpoint", "control_endpoint"})
+                if (profile[key] == profile["flight_command_endpoint"]) throw std::runtime_error("endpoints must differ");
+        }
         impl->context = zmq_ctx_new();
         if (!impl->context) throw std::runtime_error(zmq_strerror(zmq_errno()));
         impl->publisher = zmq_socket(impl->context, ZMQ_PUB);
@@ -358,9 +382,18 @@ bool ZmqCameraAdapter::publish_frame(const PackedByteArray &pixels, const Dictio
             ++impl->stale;
             return true;
         }
-        const auto capture_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        auto capture_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
             impl->capture_received.time_since_epoch()).count();
-        const auto message = impl->images.write(pixels.ptr(), pixels.size(), capture_ns);
+        std::string source_json;
+        if (number(pose.get("schema_version", 0), 3, 3, true)) {
+            if (!valid_pose(pose)) throw std::runtime_error("invalid stamped capture pose");
+            Dictionary source = Dictionary(pose["source"]).duplicate();
+            source["measurement_us"] = int64_t(source["measurement_us"]);
+            source["step_index"] = int64_t(source["step_index"]);
+            capture_ns = int64_t(source["measurement_us"]) * 1000;
+            source_json = JSON::stringify(source).utf8().get_data();
+        }
+        const auto message = impl->images.write(pixels.ptr(), pixels.size(), capture_ns, source_json);
         if (message.empty()) { ++impl->busy_slots; return true; }
         if (zmq_send(impl->publisher, message.data(), message.size(), ZMQ_DONTWAIT) < 0) {
             if (zmq_errno() == EAGAIN) { ++impl->publication_drops; return true; }

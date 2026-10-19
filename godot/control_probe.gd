@@ -14,6 +14,8 @@ func _start() -> void:
 	command_path = args[0]
 	report_path = args[1]
 	scene = load("res://main.tscn").instantiate()
+	if args.size() > 2:
+		scene.transport_config_path = args[2]
 	root.add_child(scene)
 
 func _process(_delta: float) -> bool:
