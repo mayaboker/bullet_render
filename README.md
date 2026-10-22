@@ -221,9 +221,9 @@ Run `uv sync --locked --all-packages --all-extras --all-groups` in `../bullet_ap
 The combined tasks launch the app with `--mission-config
 ../los_tracking/examples/bullet_profile.json`. Wait for app READY, then press
 Godot Start: warmup, arm, climb 20 m relative to the initial barometer, settle
-for 3 s and wait for a fresh post-hover bbox before LOS. Missing bbox times out
-after 5 s; expired RC or LOS faults freeze physics. Renderer-confirmed truck
-contact completes the scenario; landing is not inferred. See [app mission details](../bullet_app/README.md). The separate
+for 3 s and wait for a fresh post-hover bbox before LOS. Missing bbox starts a
+15 deg/s yaw search for one measured full circle; expired RC or LOS faults freeze
+physics. Renderer-confirmed truck contact completes the scenario; landing is not inferred. See [app mission details](../bullet_app/README.md). The separate
 Position flight task still runs the square.
 
 With a real graphics display, run the isolated-port check:
@@ -351,3 +351,16 @@ uv run --locked --all-packages --all-extras --all-groups python tools/check_spaw
 The integration exercises a real screen click, Apply/Start/Reset, renderer
 restart, a selected 6 m takeoff and MCAP readback. Report, logs and a panel screenshot
 remain in `/tmp/bullet-spawn/`; integration bags are temporary.
+
+Yaw-search display/MCAP checks use isolated ports and temporary recordings:
+
+```bash
+uv run --locked --all-packages --all-extras --all-groups python tools/check_app_flight.py --yaw-search found --report-dir /tmp/bullet-yaw-found
+uv run --locked --all-packages --all-extras --all-groups python tools/check_app_flight.py --yaw-search empty --report-dir /tmp/bullet-yaw-empty
+```
+
+The test probe prepares a terrain-cleared scenario behind the truck using the
+existing panel and Apply acknowledgement. The first case verifies search, yaw
+settling, new-heading LOS acquisition/approach and the app-loss watchdog; the
+second hides the rendered truck and verifies full-circle exhaustion/freeze.
+Reports, screenshots and logs are retained in the specified report directory.

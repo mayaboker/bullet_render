@@ -27,6 +27,7 @@ BIN = ROOT.parent / '.venv/bin'
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--report-dir', type=Path, default=Path('/tmp/bullet-app-flight'))
+    parser.add_argument('--yaw-search', choices=('found', 'empty'), help='Search with the target behind the spawn, or hide it for a full circle')
     args = parser.parse_args()
     args.report_dir.mkdir(parents=True, exist_ok=True)
     processes = []
@@ -92,14 +93,14 @@ def main():
                 pump()
                 if predicate():
                     return
-                assert all(p.poll() is None for p in processes), f'component exited: {description}; inspect {args.report_dir}'
-                assert time.monotonic() < deadline, f'timed out: {description}; latest={latest.get(MISSION_TOPIC)}; inspect {args.report_dir}'
+                assert all(p.poll() is None for p in processes), f'component exited: {description}; statuses={[(p.args, p.poll()) for p in processes]}; inspect {args.report_dir}'
+                assert time.monotonic() < deadline, f'timed out: {description}; latest={latest.get(MISSION_TOPIC)}; snapshot={snapshot()}; inspect {args.report_dir}'
                 time.sleep(.01)
-        def command(action):
+        def command(action, **kwargs):
             nonlocal sequence
             sequence += 1
             pending = command_path.with_suffix('.tmp')
-            pending.write_text(json.dumps(dict(sequence=sequence, action=action)))
+            pending.write_text(json.dumps(dict(sequence=sequence, action=action, **kwargs)))
             pending.replace(command_path)
         try:
             launch('recorder', [str(BIN / 'mcap-bagger'), '--config', str(temp / 'recorder.yaml')], ROOT.parent / 'mcap_bagger')
@@ -110,10 +111,59 @@ def main():
             launch('godot', ['godot', '--path', str(ROOT / 'godot'), '--script', 'control_probe.gd', '--',
                              str(command_path), str(state_path), str(temp / 'transport.json')], ROOT)
             wait(lambda: latest.get(MISSION_TOPIC, {}).get('phase') == 'READY' and snapshot().get('state', {}).get('state') == 'stopped' and not snapshot().get('disabled', {}).get('start', True), 'ready')
+            if args.yaw_search:
+                command('search_setup', target_visible=args.yaw_search == 'found')
+                wait(lambda: snapshot().get('target_visible') == (args.yaw_search == 'found'), 'search scene setup')
+                wait(lambda: snapshot().get('draft', [0])[0] == 100 and not snapshot().get('spawn_apply_disabled', True), 'search draft and terrain clearance')
+                old_episode = snapshot()['spawn']['episode_id']
+                command('spawn_apply')
+                wait(lambda: snapshot().get('spawn', {}).get('result') == 'applied' and snapshot()['spawn']['episode_id'] != old_episode, 'search spawn confirmed')
+                wait(lambda: latest.get(MISSION_TOPIC, {}).get('episode_id') == snapshot()['spawn']['episode_id'], 'app sees selected episode')
             time.sleep(.2)
             command('start')
+            if args.yaw_search:
+                wait(lambda: latest.get(MISSION_TOPIC, {}).get('phase') == 'YAW_SEARCH', 'yaw search begins after hover', timeout=60)
+                assert 'LOS_ACQUIRE' not in phases and 'LOS_APPROACH' not in phases, phases
+                (args.report_dir / 'yaw-search.png.done').unlink(missing_ok=True)
+                command('spawn_screenshot', path=str(args.report_dir / 'yaw-search.png'))
+                wait(lambda: (args.report_dir / 'yaw-search.png.done').exists(), 'search screenshot')
+            if args.yaw_search == 'empty':
+                wait(lambda: latest.get(MISSION_TOPIC, {}).get('phase') == 'FAULT', 'one measured full circle without detection', timeout=40)
+                status = latest[MISSION_TOPIC]
+                assert status['reason'] == 'search_exhausted', status
+                assert status['diagnostics']['search_swept_deg'] >= 360 - 1e-6, status
+                assert 'LOS_ACQUIRE' not in phases and 'LOS_APPROACH' not in phases, phases
+                wait(lambda: latest.get(FEEDBACK_TOPIC, {}).get('state') == 'stopped', 'exhausted search freezes physics')
+                frozen = latest[FEEDBACK_TOPIC]['source']['step_index']
+                time.sleep(.3)
+                pump()
+                assert latest[FEEDBACK_TOPIC]['source']['step_index'] == frozen
+                wait(lambda: bool(list((temp / 'recordings').glob('*.mcap'))) and not list((temp / 'recordings').glob('*.partial')), 'search MCAP finalized')
+                recorded_search = []
+                for path in (temp / 'recordings').glob('*.mcap'):
+                    with path.open('rb') as stream:
+                        for _, channel, message in make_reader(stream).iter_messages():
+                            if channel.topic == MISSION_TOPIC.decode():
+                                packet = json.loads(message.data)
+                                if packet['phase'] == 'YAW_SEARCH':
+                                    recorded_search.append(packet)
+                            elif channel.topic == LOS_TOPIC.decode():
+                                assert not validate_los(json.loads(message.data))['active']
+                assert len(recorded_search) >= 100
+                assert any(p['diagnostics']['search_swept_deg'] > 350 for p in recorded_search)
+                report = dict(phases=phases, search_status_samples=len(recorded_search),
+                              final_diagnostics=status['diagnostics'], frozen_step=frozen, reason=status['reason'])
+                (args.report_dir / 'report.json').write_text(json.dumps(report, indent=2))
+                print(json.dumps(report, indent=2))
+                return
             wait(lambda: latest.get(MISSION_TOPIC, {}).get('phase') == 'LOS_APPROACH', 'takeoff, hover, post-hover detection and LOS', timeout=65)
             assert all(p in phases for p in ('SENSOR_WARMUP', 'ARMING', 'TAKEOFF', 'HOVER', 'WAIT_TARGET', 'LOS_ACQUIRE', 'LOS_APPROACH')), phases
+            if args.yaw_search == 'found':
+                assert 'YAW_SETTLE' in phases, phases
+                assert latest[MISSION_TOPIC]['diagnostics']['bearing_valid']
+                from los_tracking.geometry import euler
+                acquired_heading_deg = degrees(euler(latest[FEEDBACK_TOPIC]['orientation_xyzw'])[2])
+                assert 120 < acquired_heading_deg < 180, acquired_heading_deg
             until = time.monotonic() + 1
             while time.monotonic() < until:
                 pump()
@@ -159,6 +209,7 @@ def main():
             counts, poses, boxes = {}, {}, []
             los_packets = []
             mission_diagnostics = {}
+            search_packets = []
             for path in (temp / 'recordings').glob('*.mcap'):
                 with path.open('rb') as stream:
                     for _, channel, message in make_reader(stream).iter_messages():
@@ -168,6 +219,8 @@ def main():
                         elif channel.topic == MISSION_TOPIC.decode():
                             packet = json.loads(message.data)
                             mission_diagnostics[(packet['episode_id'], packet['measurement_us'])] = packet['diagnostics']
+                            if packet['phase'] in ('YAW_SEARCH', 'YAW_SETTLE'):
+                                search_packets.append(packet)
                         if channel.topic == 'render/drone_1/pose':
                             p = json.loads(message.data)
                             source = p['source']
@@ -197,7 +250,10 @@ def main():
                     assert poses[key] == source['measurement_us']
                     matched += 1
             assert matched > 10, 'no exact image/bbox/pose source associations'
-            report = dict(los_degree_samples_checked=converted, exact_source_associations=matched, phases=phases, counts=counts, watchdog_reason='rc_expired', watchdog_latency_s=watchdog_latency_s, frozen_step=frozen, restart_requires_start=True, reset_verified=True)
+            if args.yaw_search == 'found':
+                assert any(p['phase'] == 'YAW_SEARCH' and p['diagnostics']['search_swept_deg'] > 90 for p in search_packets)
+                assert any(p['phase'] == 'YAW_SETTLE' for p in search_packets)
+            report = dict(acquired_heading_deg=acquired_heading_deg if args.yaw_search == 'found' else None, search_status_samples=len(search_packets), los_degree_samples_checked=converted, exact_source_associations=matched, phases=phases, counts=counts, watchdog_reason='rc_expired', watchdog_latency_s=watchdog_latency_s, frozen_step=frozen, restart_requires_start=True, reset_verified=True)
             (args.report_dir / 'report.json').write_text(json.dumps(report, indent=2))
             print(json.dumps(report, indent=2))
         finally:

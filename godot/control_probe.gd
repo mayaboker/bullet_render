@@ -28,7 +28,16 @@ func _process(_delta: float) -> bool:
 			last_command = command.get("sequence", -1)
 			var action: String = command.get("action", "")
 			var panel = scene.spawn_panel
-			if action == "spawn_pick":
+			if action == "search_setup":
+				scene.truck.visible = command.get("target_visible", true)
+				scene.distance = 180.0
+				panel.show()
+				panel.draft = [100.0, 0.0, 0.015]
+				panel.preset_name.text = "Yaw search test"
+				panel.takeoff.value = 6.0
+				panel.auto_z_pending = true
+				panel._draft_changed()
+			elif action == "spawn_pick":
 				panel.show()
 				panel.takeoff.value = command.get("takeoff_height_m", 20.0)
 				panel.preset_name.text = "Integration test"
@@ -41,11 +50,7 @@ func _process(_delta: float) -> bool:
 			elif action == "spawn_apply":
 				panel.apply_button.pressed.emit()
 			elif action == "spawn_screenshot":
-				await RenderingServer.frame_post_draw
-				var saved := root.get_texture().get_image().save_png(command.path)
-				var done := FileAccess.open(command.path + ".done", FileAccess.WRITE)
-				done.store_string(str(saved))
-				done.close()
+				_capture_screenshot.call_deferred(command.path)
 			if scene.control_buttons.has(action) and not scene.control_buttons[action].disabled:
 				scene.control_buttons[action].pressed.emit()
 	var now := Time.get_ticks_msec()
@@ -54,7 +59,7 @@ func _process(_delta: float) -> bool:
 		for action: String in scene.control_buttons:
 			disabled[action] = scene.control_buttons[action].disabled
 		var report := {"state": scene.adapter.get_control_state(), "disabled": disabled,
-			"spawn": scene.adapter.get_spawn_state(), "draft": scene.spawn_panel.draft,
+			"target_visible": scene.truck.visible, "spawn": scene.adapter.get_spawn_state(), "draft": scene.spawn_panel.draft,
 			"spawn_pending": scene.spawn_panel.pending, "spawn_message": scene.spawn_panel.message.text,
 			"spawn_apply_disabled": scene.spawn_panel.apply_button.disabled, "terrain_height": scene.spawn_panel.terrain_height,
 			"stats": scene.adapter.get_stats(), "collision_failed": scene.collision_failed, "display": scene.control_display, "position": [scene.drone.position.x, scene.drone.position.y, scene.drone.position.z]}
@@ -63,6 +68,14 @@ func _process(_delta: float) -> bool:
 			file.store_string(JSON.stringify(report))
 		last_report = now
 	return false
+
+func _capture_screenshot(path: String) -> void:
+	# Keep SceneTree._process synchronous: its bool return controls tree lifetime.
+	await RenderingServer.frame_post_draw
+	var saved := root.get_texture().get_image().save_png(path)
+	var done := FileAccess.open(path + ".done", FileAccess.WRITE)
+	done.store_string(str(saved))
+	done.close()
 
 func _finalize() -> void:
 	if scene != null and scene.adapter != null:
