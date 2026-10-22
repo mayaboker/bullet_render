@@ -163,7 +163,7 @@ def main():
                 assert latest[MISSION_TOPIC]['diagnostics']['bearing_valid']
                 from los_tracking.geometry import euler
                 acquired_heading_deg = degrees(euler(latest[FEEDBACK_TOPIC]['orientation_xyzw'])[2])
-                assert 120 < acquired_heading_deg < 180, acquired_heading_deg
+                assert abs(abs(acquired_heading_deg) - 180) < 5, acquired_heading_deg
             until = time.monotonic() + 1
             while time.monotonic() < until:
                 pump()
@@ -210,6 +210,7 @@ def main():
             los_packets = []
             mission_diagnostics = {}
             search_packets = []
+            centered_handoffs = []
             for path in (temp / 'recordings').glob('*.mcap'):
                 with path.open('rb') as stream:
                     for _, channel, message in make_reader(stream).iter_messages():
@@ -219,7 +220,9 @@ def main():
                         elif channel.topic == MISSION_TOPIC.decode():
                             packet = json.loads(message.data)
                             mission_diagnostics[(packet['episode_id'], packet['measurement_us'])] = packet['diagnostics']
-                            if packet['phase'] in ('YAW_SEARCH', 'YAW_SETTLE'):
+                            if packet['phase'] == 'LOS_ACQUIRE' and 'target_centered' in packet['diagnostics']:
+                                centered_handoffs.append(packet)
+                            if packet['phase'] in ('YAW_SEARCH', 'YAW_CENTER', 'YAW_SETTLE'):
                                 search_packets.append(packet)
                         if channel.topic == 'render/drone_1/pose':
                             p = json.loads(message.data)
@@ -250,10 +253,16 @@ def main():
                     assert poses[key] == source['measurement_us']
                     matched += 1
             assert matched > 10, 'no exact image/bbox/pose source associations'
+            assert centered_handoffs, 'missing centered-only handoff in MCAP'
+            for handoff in centered_handoffs:
+                d = handoff['diagnostics']
+                assert d['target_centered'] and abs(d['target_error_x_px']) <= 10, d
+                assert d['search_commanded_yaw_rate_deg_s'] == 0, d
             if args.yaw_search == 'found':
+                assert any(p['phase'] == 'YAW_CENTER' for p in search_packets)
                 assert any(p['phase'] == 'YAW_SEARCH' and p['diagnostics']['search_swept_deg'] > 90 for p in search_packets)
                 assert any(p['phase'] == 'YAW_SETTLE' for p in search_packets)
-            report = dict(acquired_heading_deg=acquired_heading_deg if args.yaw_search == 'found' else None, search_status_samples=len(search_packets), los_degree_samples_checked=converted, exact_source_associations=matched, phases=phases, counts=counts, watchdog_reason='rc_expired', watchdog_latency_s=watchdog_latency_s, frozen_step=frozen, restart_requires_start=True, reset_verified=True)
+            report = dict(centered_handoff_errors_px=[p['diagnostics']['target_error_x_px'] for p in centered_handoffs], acquired_heading_deg=acquired_heading_deg if args.yaw_search == 'found' else None, search_status_samples=len(search_packets), los_degree_samples_checked=converted, exact_source_associations=matched, phases=phases, counts=counts, watchdog_reason='rc_expired', watchdog_latency_s=watchdog_latency_s, frozen_step=frozen, restart_requires_start=True, reset_verified=True)
             (args.report_dir / 'report.json').write_text(json.dumps(report, indent=2))
             print(json.dumps(report, indent=2))
         finally:
