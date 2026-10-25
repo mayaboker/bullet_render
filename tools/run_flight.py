@@ -59,7 +59,7 @@ def main():
                 raise RuntimeError('Recorder did not become ready; inspect recorder.log')
             time.sleep(.05)
         launch('godot', [str(ROOT / 'tools/run_godot.sh'), '--path', str(ROOT / 'godot')], ROOT)
-        launch('physics', [sys.executable, '-m', 'examples.external_rc.main', '--config', str(ROOT.parent / 'bullet_drone/configs/basic.yaml'), '--render-config', str(ROOT / 'configs/physics.json')], ROOT.parent / 'bullet_drone')
+        launch('physics', [sys.executable, '-m', 'examples.external_rc.main', '--config', str(ROOT.parent / 'basic.yaml'), '--render-config', str(ROOT / 'configs/physics.json')], ROOT.parent / 'bullet_drone')
         launch('app', [str(Path(sys.executable).parent / 'bullet-app'), '--transport-config', str(ROOT / 'configs/transport.json'), '--mission-config', str(ROOT.parent / 'los_tracking/examples/bullet_profile.json'), '--debug'], ROOT.parent / 'bullet_app')
         (session / 'processes.json').write_text(json.dumps({name: process.pid for name, process in processes}, indent=2))
         while all(process.poll() is None for _, process in processes):
