@@ -2,7 +2,6 @@
 import argparse
 from contextlib import ExitStack
 import json
-import os
 from pathlib import Path
 import signal
 import subprocess
@@ -46,6 +45,8 @@ def main():
                 topic['endpoint'] = transport['control_endpoint']
             elif topic['key'] == 'flight/drone_1/rc':
                 topic['endpoint'] = transport['flight_command_endpoint']
+            elif topic['key'] == 'analysis/render/health':
+                topic['endpoint'] = transport['image_endpoint']
             elif 'endpoint' in topic:
                 topic['endpoint'] = app_endpoint
         recorder_path = temp / 'recorder.yaml'
@@ -60,8 +61,7 @@ def main():
         sub.connect(app_endpoint)
         def launch(name, command, cwd):
             log = stack.enter_context((args.report_dir / f'{name}.log').open('w'))
-            env = dict(os.environ, __NV_PRIME_RENDER_OFFLOAD='1', __GLX_VENDOR_LIBRARY_NAME='nvidia')
-            process = subprocess.Popen(command, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT)
+            process = subprocess.Popen(command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT)
             processes.append(process)
             return process
         def snapshot():
@@ -99,7 +99,7 @@ def main():
             launch('physics', [str(BIN / 'python'), '-m', 'examples.external_rc.main', '--render-config', str(physics_path)], ROOT.parent / 'bullet_drone')
             launch('app', [str(BIN / 'bullet-app'), '--transport-config', str(transport_path), '--bbox-endpoint', app_endpoint,
                            '--mission-config', str(ROOT.parent / 'los_tracking/examples/bullet_profile.json')], ROOT.parent / 'bullet_app')
-            godot = launch('godot', ['godot', '--path', str(ROOT / 'godot'), '--script', 'control_probe.gd', '--',
+            godot = launch('godot', [str(ROOT / 'tools/run_godot.sh'), '--path', str(ROOT / 'godot'), '--script', 'control_probe.gd', '--',
                                     str(command_path), str(report_path), str(transport_path)], ROOT)
             wait(lambda: bool(current()) and not snapshot().get('disabled', {}).get('start', True), 'spawn capability and app ready')
             initial_episode = current()['episode_id']
@@ -127,7 +127,7 @@ def main():
             processes.remove(godot)
             report_path.unlink(missing_ok=True)
             command('')
-            launch('godot-restarted', ['godot', '--path', str(ROOT / 'godot'), '--script', 'control_probe.gd', '--',
+            launch('godot-restarted', [str(ROOT / 'tools/run_godot.sh'), '--path', str(ROOT / 'godot'), '--script', 'control_probe.gd', '--',
                                       str(command_path), str(report_path), str(transport_path)], ROOT)
             wait(lambda: current().get('position_m') == draft and not snapshot().get('disabled', {}).get('start', True), 'renderer restart recovery')
             assert current()['episode_id'] == applied['episode_id']

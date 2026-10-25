@@ -2,6 +2,8 @@ extends Node3D
 
 const Frames = preload("res://frames.gd")
 const SpawnPanel = preload("res://spawn_panel.gd")
+const WindPanel = preload("res://wind_panel.gd")
+const Windsock = preload("res://windsock.gd")
 const TruckCollision = preload("res://truck_collision.gd")
 const COLLISION_RETRY_MS := 100
 const COLLISION_ACK_TIMEOUT_MS := 1000
@@ -12,6 +14,9 @@ const STALE_MS := 1000
 const TRUCK_POSITION_M := Vector2(0.0, -50.0)
 const TRUCK_CLEARANCE_M := 6.0
 var spawn_panel: PanelContainer
+var wind_panel: PanelContainer
+var windsock: Node3D
+var wind_spawn_position: Array = []
 var collision_detector: RefCounted
 var pending_collision: Dictionary = {}
 var collision_started_ms := 0
@@ -24,8 +29,8 @@ var capture_only := false
 var viewport: SubViewport
 var fpv: Camera3D
 var spectator: Camera3D
-var drone := Node3D.new()
-var truck := Node3D.new()
+var drone: Node3D
+var truck: Node3D
 var status: Label
 var preview: TextureRect
 var noise := FastNoiseLite.new()
@@ -39,9 +44,7 @@ var fps_started := 0
 var measured_fps := 0.0
 var active_config: Dictionary = {}
 var last_stats_ms := 0
-var capture_usec := 0
-var publish_usec := 0
-var timing_frames := 0
+var timing_samples := {"capture_ms": [], "render_wait_ms": [], "readback_ms": [], "publish_ms": [], "source_age_ms": []}
 var control_buttons: Dictionary = {}
 var control_label: Label
 var control_display := "DISCONNECTED"
@@ -51,6 +54,13 @@ var control_notice_until := 0
 @export var transport_config_path := "res://../configs/transport.json"
 
 func _ready() -> void:
+	if not capture_only and "nvidia" not in RenderingServer.get_video_adapter_vendor().to_lower():
+		push_error("NVIDIA is required. Launch with tools/run_godot.sh --path godot")
+		process_mode = Node.PROCESS_MODE_DISABLED
+		get_tree().quit(1)
+		return
+	drone = Node3D.new()
+	truck = Node3D.new()
 	Engine.max_fps = 90
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	noise.seed = 271828
@@ -63,6 +73,7 @@ func _ready() -> void:
 	adapter = ZmqCameraAdapter.new()
 	add_child(adapter)
 	spawn_panel.setup(self, spectator, adapter)
+	wind_panel.adapter = adapter
 	if not capture_only:
 		var transport_path := ProjectSettings.globalize_path(transport_config_path)
 		if not adapter.start(transport_path):
@@ -347,11 +358,28 @@ func _ui() -> void:
 	var scenario_button := Button.new()
 	scenario_button.text = "Scenario"
 	scenario_button.custom_minimum_size = Vector2(100, 48)
-	scenario_button.pressed.connect(func(): spawn_panel.visible = not spawn_panel.visible)
+	scenario_button.pressed.connect(func():
+		spawn_panel.visible = not spawn_panel.visible
+		wind_panel.hide())
 	toolbar.add_child(scenario_button)
+	wind_panel = WindPanel.new()
+	canvas.add_child(wind_panel)
+	wind_panel.hide()
+	var wind_button := Button.new()
+	wind_button.name = "WindButton"
+	wind_button.text = "Wind"
+	wind_button.custom_minimum_size = Vector2(100, 48)
+	wind_button.accessibility_name = "Wind settings"
+	wind_button.pressed.connect(func():
+		wind_panel.visible = not wind_panel.visible
+		spawn_panel.hide())
+	toolbar.add_child(wind_button)
+	windsock = Windsock.new()
+	add_child(windsock)
+	windsock.place_at_spawn([0., 0., 0.], height_at)
 
 func _send_control(action: String) -> void:
-	if not spawn_panel.pending.is_empty() and action != "stop":
+	if (not spawn_panel.pending.is_empty() or not wind_panel.pending.is_empty()) and action != "stop":
 		return
 	if adapter == null or not adapter.publish_control(action):
 		control_notice = "Could not send command"
@@ -369,7 +397,13 @@ func _update_controls() -> void:
 	control_buttons.reset.disabled = not ready
 	var spawn: Dictionary = {} if capture_only or adapter == null else adapter.get_spawn_state()
 	spawn_panel.update_state(state, spawn, "" if adapter == null else String(adapter.get_stats().controller_id))
-	if not spawn_panel.pending.is_empty():
+	var wind: Dictionary = {} if capture_only or adapter == null else adapter.get_wind_state()
+	wind_panel.update_state(state, wind, "" if adapter == null else String(adapter.get_stats().controller_id))
+	windsock.update_wind(wind)
+	if not spawn.is_empty() and spawn.position_m != wind_spawn_position:
+		wind_spawn_position = spawn.position_m.duplicate()
+		windsock.place_at_spawn(wind_spawn_position, height_at)
+	if not spawn_panel.pending.is_empty() or not wind_panel.pending.is_empty():
 		control_buttons.start.disabled = true
 		control_buttons.reset.disabled = true
 	control_display = String(state.state).to_upper() if connected else "DISCONNECTED"
@@ -438,17 +472,30 @@ func _process(_delta: float) -> void:
 	var state := control_display
 	var drops := 0
 	if adapter != null:
+		adapter.publish_health()
 		var stats := adapter.get_stats()
 		drops = stats.sequence_gaps + stats.stale
 	if not capture_only and now - last_stats_ms >= 5000:
 		var sample := adapter.get_stats()
-		if timing_frames > 0:
-			sample["capture_ms_mean"] = capture_usec / (1000.0 * timing_frames)
-			sample["publish_ms_mean"] = publish_usec / (1000.0 * timing_frames)
-			sample["timing_frames"] = timing_frames
+		sample["timing_frames"] = timing_samples.capture_ms.size()
+		for metric: String in timing_samples:
+			var summary := timing_summary(timing_samples[metric])
+			for statistic: String in summary:
+				sample[metric + "_" + statistic] = summary[statistic]
+			timing_samples[metric].clear()
 		print("Native camera stats: ", JSON.stringify(sample))
 		last_stats_ms = now
 	status.text = "%s   ·   %.1f FPS   ·   %d captures   ·   %d gaps/stale" % [state, measured_fps, total_frames, drops]
+
+static func timing_summary(samples: Array) -> Dictionary:
+	if samples.is_empty():
+		return {}
+	var sorted := samples.duplicate()
+	sorted.sort()
+	var total := 0.0
+	for value: float in sorted:
+		total += value
+	return {"mean": total / sorted.size(), "p95": sorted[ceili(sorted.size() * 0.95) - 1], "max": sorted.back()}
 
 func _capture(request: Dictionary) -> void:
 	var capture_started := Time.get_ticks_usec()
@@ -462,7 +509,11 @@ func _capture(request: Dictionary) -> void:
 	drone.transform = Transform3D(Frames.orientation(request.pose.orientation_xyzw), Frames.position(request.pose.position_m))
 	fpv.global_transform = drone.global_transform
 	viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
-	await RenderingServer.frame_post_draw
+	drone.force_update_transform()
+	fpv.force_update_transform()
+	# Publish camera pixels before window presentation can stall the frame.
+	RenderingServer.force_draw(false)
+	var readback_started := Time.get_ticks_usec()
 	var image := viewport.get_texture().get_image()
 	if image == null or image.is_empty():
 		push_error("Camera readback returned an empty image")
@@ -474,9 +525,12 @@ func _capture(request: Dictionary) -> void:
 	if not capture_only and not adapter.publish_frame(pixels, request):
 		get_tree().quit(1)
 		return
-	capture_usec += publish_started - capture_started
-	publish_usec += Time.get_ticks_usec() - publish_started
-	timing_frames += 1
+	timing_samples.capture_ms.append((publish_started - capture_started) / 1000.0)
+	timing_samples.render_wait_ms.append((readback_started - capture_started) / 1000.0)
+	timing_samples.readback_ms.append((publish_started - readback_started) / 1000.0)
+	timing_samples.publish_ms.append((Time.get_ticks_usec() - publish_started) / 1000.0)
+	if not capture_only:
+		timing_samples.source_age_ms.append(adapter.get_stats().source_age_ms)
 	total_frames += 1
 	fps_frames += 1
 	busy = false

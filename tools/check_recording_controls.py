@@ -73,7 +73,7 @@ def main():
         try:
             launch('recorder', [str(SHARED_BIN / 'mcap-bagger'),
                                '--config', str(config_path)], ROOT.parent / 'mcap_bagger')
-            launch('godot', ['godot', '--path', str(ROOT / 'godot'), '--script', 'control_probe.gd',
+            launch('godot', [str(ROOT / 'tools/run_godot.sh'), '--path', str(ROOT / 'godot'), '--script', 'control_probe.gd',
                              '--', str(command_path), str(state_path)], ROOT)
             physics = launch('physics', [str(SHARED_BIN / 'python'), '-m',
                 'examples.position_square.main', '--headless', '--render-config',

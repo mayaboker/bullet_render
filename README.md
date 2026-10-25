@@ -137,7 +137,9 @@ cmake --build --preset debug
 Unchanged configure/build runs reuse the existing bindings and extension; real
 source, profile or build-setting changes still trigger the required rebuild.
 
-The output is `godot/bin/libzmq_camera.so`, linked to system libzmq. CMake imports
+The output is `godot/bin/libzmq_camera.so`, linked to system libzmq and the shared
+C++ runtime. Sharing that runtime avoids initialization collisions with Mesa/LLVM
+on Intel graphics. CMake imports
 the extension into Godot; a one-second frame delay avoids Godot's cold-import
 shutdown race (upstream issue #111048). Generated files remain ignored.
 
@@ -164,7 +166,7 @@ uv run --locked --all-packages --all-extras --all-groups mcap-bagger --config ..
 
 ```bash
 # bullet_render; NVIDIA PRIME offload verified on the RTX 5070 Laptop GPU
-__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia godot --path godot
+./tools/run_godot.sh --path godot
 ```
 
 ```bash
@@ -173,15 +175,12 @@ uv run --locked --all-packages --all-extras --all-groups python -m examples.exte
   --render-config ../bullet_render/configs/physics.json
 ```
 
-For PlotJuggler, run the workspace `Bullet: Plotter (live position)` task and connect
-its ZMQ Subscriber to TCP transport, address `127.0.0.1`, port `5555`, topic
-`render/drone_1/pose`, using JSON and `simulation_time_s` as the embedded timestamp. The workspace
-`Bullet: Run all` task opens renderer, physics, MCAP recorder, plotter and camera/bbox app in dedicated terminals;
-the renderer uses NVIDIA PRIME. MCAP recording is automatic; PlotJuggler needs its connection. `Bullet: Open tools` lets
-you prepare them before starting `Bullet: Position flight`.
+Use workspace task **Bullet: Run all** to build the native renderer and launch
+`bullet_app`, Godot, external-RC `bullet_drone` physics and the episode recorder in one terminal.
+Recording is enabled automatically, with process logs under `recordings/launch_<UTC>/`. Wait for `Mission READY`, then press Start in Godot. Exiting any
+service stops the remaining services. PlotJuggler and the standalone video viewer
+are not launched by this task.
 
-Use workspace task **Bullet: Physics + render + app** to start app-owned takeoff/LOS physics,
-Godot renderer, automatic MCAP recorder and camera/bbox app together in dedicated terminals.
 
 ## Simulation toolbar
 
@@ -315,7 +314,7 @@ and nonblocking publication remain in place. The recorder uses `input: shm_image
 copies pixels into its bounded 64 MiB queue, and reports skipped SHM images.
 Malformed data and queue overflow fail recording rather than hiding accepted-data
 loss. ZMQ can also drop notifications before receipt, which counters cannot fully
-observe. Arrival-time MCAP alone does not provide exact image/pose association; use the
+observe. The recorder now preserves an exact image identity sidecar, `camera/front/image/metadata`, linked by image log time and record sequence. Use the
 stamped source identity when available.
 
 Start the camera/bbox preview (or use workspace **Bullet: App (debug)**):
@@ -335,8 +334,7 @@ GPU readback; scenery remains visual with no Bullet collision geometry.
 ```bash
 uv run --locked --all-packages --all-extras --all-groups pytest -q
 godot --headless --path godot --script test_frames.gd
-__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
-  godot --path godot --script test_scene.gd
+./tools/run_godot.sh --path godot --script test_scene.gd
 __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
   uv run --locked --all-packages --all-extras --all-groups \
   python tools/check_pipeline.py --seconds 60 --report-dir /tmp/bullet-zmq-check
@@ -368,20 +366,19 @@ Simulation-control validation and limits are recorded in
 
 The sibling `bullet_app` receives camera images, calls `los_tracking`, and publishes
 `tracking/front/bbox` JSON on loopback port 5558. The recorder profile records it
-with `bullet_msgs:bbox.json` during each episode. **Bullet: Physics + render + app**
-and **Bullet: Run all** launch the application in debug mode with bounding boxes.
+with `bullet_msgs:bbox.json` during each episode. **Bullet: Run all** launches
+the application in debug mode with bounding boxes.
 Run `uv sync --locked --all-packages --all-extras --all-groups` in `../bullet_app` before using these tasks; see the
 [application README](../bullet_app/README.md) for the standalone command.
 
 ## App flight verification
 
-The combined tasks launch the app with `--mission-config
+The workspace task launches the app with `--mission-config
 ../los_tracking/examples/bullet_profile.json`. Wait for app READY, then press
 Godot Start: warmup, arm, climb 20 m relative to the initial barometer, settle
 for 3 s and wait for a fresh post-hover bbox before LOS. Missing bbox starts a
 15 deg/s yaw search for one measured full circle; expired RC or LOS faults freeze
-physics. Renderer-confirmed truck contact completes the scenario; landing is not inferred. See [app mission details](../bullet_app/README.md). The separate
-Position flight task still runs the square.
+physics. Renderer-confirmed truck contact completes the scenario; landing is not inferred. See [app mission details](../bullet_app/README.md).
 
 With a real graphics display, run the isolated-port check:
 
@@ -521,3 +518,119 @@ existing panel and Apply acknowledgement. The first case verifies search, horizo
 settling, centered-heading LOS acquisition/approach and the app-loss watchdog; the
 second hides the rendered truck and verifies full-circle exhaustion/freeze.
 Reports, screenshots and logs are retained in the specified report directory.
+
+### Camera latency checks
+
+Godot selects the latest pending pose when idle, applies the camera transform
+immediately and renders with `RenderingServer.force_draw(false)`. Camera
+readback and SHM publication complete before the normal window presentation,
+so a delayed swap cannot hold an already selected camera pose. Physics still schedules poses at
+30 Hz; SHM has no separate timer and never waits for readers.
+
+Every five seconds, `Native camera stats` reports windowed mean, p95 and maximum
+for `render_wait_ms`, `readback_ms`, `capture_ms`, `publish_ms` and `source_age_ms`.
+Source age uses the original physics measurement clock, including time before
+Godot received the pose. Stopped physics intentionally produces old source ages;
+compare these statistics during a running episode. `busy_slots` and
+`publication_drops` identify nonblocking image drops.
+
+The app reserves 20 ms of remaining image validity for its next 100 Hz command
+tick and transport. Navigation enters recovery (`image_deadline`) before an
+image-limited command expires between ticks. The 100 ms image freshness limit,
+command expiry enforcement and process-loss watchdog remain in effect.
+
+Run timing summary checks with
+`godot --headless --path godot --script test_camera_timing.gd`. The real-display
+`tools/check_app_flight.py` check exercises acquisition, image-gap recovery,
+reacquisition and the process-loss watchdog.
+
+### NVIDIA PRIME display path
+
+Use `./tools/run_godot.sh --path godot` or **Bullet: Run all**. The launcher
+selects NVIDIA PRIME with the NVIDIA GLX driver on X11 and disables application
+vsync. The production scene rejects an Intel/software renderer instead of silently
+running on it. Real-display test tools use the same launcher; headless checks
+and capture-only visual fixtures remain available separately.
+
+`prime-select query` distinguishes system profiles. `on-demand` keeps the desktop
+on Intel and offloads Godot to NVIDIA, so presentation still crosses GPUs.
+To use the NVIDIA system profile, run `sudo prime-select nvidia`, then log out
+and back in (or reboot). Verify the new session with `prime-select query`,
+`xrandr --listproviders`, Godot's GPU startup line and `nvidia-smi`. The hardware's
+physical display wiring can still require an Intel output sink. Re-run the camera
+timing/flight checks after changing the session; launch flags cannot certify that
+system-level presentation latency is fixed.
+
+## Live wind and windsock
+
+In the external-RC/LOS workflow, **Wind** beside **Scenario** toggles a separate
+settings panel. Opening it does not send a command. Edit enabled state, world XYZ
+mean velocity in m/s (+Z up), correlated gust XYZ standard deviation in m/s,
+positive correlation time in seconds and integer seed, then **Apply wind**.
+The vector points downstream, toward air travel. Standard deviation is statistical
+variation, not a gust limit. Applied mean and current mean-plus-gust air velocity
+come from physics, using existing ports and ownership/retry checks.
+
+Apply works running or stopped; stopped edits do not advance time. Mean/gust/tau
+edits preserve gust history; seed or enable/mode changes restart it. Start/Reset
+and spawn changes keep settings and restart gusts. Physics restart reloads YAML;
+GUI changes are not saved. Other physics examples display unavailable controls.
+
+A procedural 3 m pole and 2 m windsock sits beside the confirmed spawn, +8 m
+world Y, grounded on the visual terrain. It follows the full authoritative wind
+vector, hangs down below 0.1 m/s and turns gray with “Wind unavailable” on stale
+readback. It uses spectator layer 2 with no collision or shadows and is excluded
+from the drone camera. Godot generates neither wind physics nor random gusts.
+
+Checks: `godot --headless --path godot --script test_wind.gd`,
+`./tools/run_godot.sh --path godot --script test_wind_scene.gd` (display required),
+and `uv run --locked --no-sync pytest -q tests/test_native_adapter.py tests/test_live_wind_pipeline.py`.
+
+## Automatic flight analysis recording
+
+**Bullet: Run all** builds the renderer and runs `tools/run_flight.py` in the
+shared uv environment. It starts the recorder before flight services, creates
+one MCAP for each running episode and stores separate `app.log`, `physics.log`,
+`godot.log` and `recorder.log` files under `recordings/launch_<UTC>/`. MCAP health
+metadata includes that launch ID. The launcher drains the recorder after stopping
+other services. Existing recordings are never overwritten or automatically deleted.
+Do not launch another recorder separately when using this task.
+
+The normal profile now includes wind, simulation state, actual ground truth
+(100 Hz), available sensor outputs (physics sampling rate), physics/app config
+snapshots (1 Hz), and renderer counters (1 Hz). Images retain original frame/source
+identity in a paired metadata channel. Diagnostic streams use existing endpoints;
+none feed ground truth into the app controller or change clipping behavior.
+
+Generate an offline report without modifying any flight settings:
+
+```bash
+uv run --locked --all-packages --all-extras --all-groups python -m mcap_bagger.report \
+  recordings/<flight>.mcap --output /tmp/flight-analysis --csv
+```
+
+Open `/tmp/flight-analysis/report.html`. It identifies the first recorded
+`clipped_target`, the exact rejected image when available, nearby images, commands,
+wind, sensor errors and ages. `report.json` keeps the analysis window and source
+stamps; optional `telemetry.csv` flattens the same window. Legacy files work but
+report missing identity/diagnostics rather than guessing an exact image match.
+
+### Configure the MCAP directory
+
+**Bullet: Run all** now reads `../bullet_app/configs/app.json`. Its
+`recording.output_dir` controls future MCAP files only, with relative paths based
+on the app configuration file. The supplied configuration uses `../recordings/` in the shared workspace.
+The recorder YAML's output directory remains the standalone-recorder fallback.
+
+From this directory, use a different destination for one launch:
+
+```bash
+uv run --locked --all-packages --all-extras --all-groups python tools/run_flight.py \
+  --mcap-output-dir /data/flights
+```
+
+`--app-config PATH` selects a different app configuration; the CLI directory wins
+over the file and is working-directory-relative. Absolute paths and `~` work.
+The recorder creates/checks the directory before readiness. Any failure aborts
+launch before Godot, physics and app start. Logs remain under
+`recordings/launch_<UTC>/`; filenames, episode recording and shutdown are unchanged.

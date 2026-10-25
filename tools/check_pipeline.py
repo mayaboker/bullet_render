@@ -72,7 +72,7 @@ def main():
                 return process
             command_path = Path(temporary) / 'godot-command.json'
             state_path = Path(temporary) / 'godot-state.json'
-            godot_command = ['godot', '--path', str(ROOT / 'godot'), '--script', 'control_probe.gd',
+            godot_command = [str(ROOT / 'tools/run_godot.sh'), '--path', str(ROOT / 'godot'), '--script', 'control_probe.gd',
                              '--', str(command_path), str(state_path)]
             command_sequence = 0
             def snapshot():
@@ -229,7 +229,7 @@ def main():
                         first_image = Image.frombytes('RGB', (640,480), image.data)
                         assert len(set(image.data)) > 32, 'blank camera frame'
                     images += 1
-                else:
+                elif channel.topic == 'render/drone_1/pose':
                     pose = json.loads(message.data)
                     assert len(pose['position_m']) == 3 and len(pose['orientation_xyzw']) == 4
                     assert pose['schema_version'] == 2 and len(pose['linear_velocity_m_s']) == 3
