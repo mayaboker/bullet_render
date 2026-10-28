@@ -1,5 +1,9 @@
 # Bullet Render — native Godot / ZeroMQ camera
 
+An alternate [Isaac Sim 5.0 renderer](isaac/README.md) supports USD worlds,
+a perspective drone marker, physics-confirmed starting position/takeoff-height
+controls, and confirmed truck-contact completion using the existing transport.
+
 This project is a member of the [Bullet workspace](../README.md). All six
 projects share `../.venv` and `../uv.lock`; run uv commands with the
 workspace flags below to retain every project and optional dependency.
@@ -237,6 +241,17 @@ the app to verify the expiry watchdog freezes physics, and reads back the bag.
 Logs/report are retained in `/tmp/bullet-app-flight`; temporary bags are removed.
 The native adapter preserves source pose/feedback identity in descriptor v2,
 using the measurement timestamp for capture_ns; binary SHM remains v1.
+
+Two RC lease diagnostics need no display. `tools/check_rc_deadlines.py` replays
+the mission against the real physics lease at a fresh and a delayed camera
+latency and asserts that only the delayed case expires. `tools/check_rc_timing.py`
+subscribes to the default local ports for 8 s and prints the RC packet gaps and
+the smallest remaining lease margin; it never sends commands.
+
+```bash
+uv run --locked --all-packages --all-extras --all-groups python tools/check_rc_deadlines.py
+uv run --locked --all-packages --all-extras --all-groups python tools/check_rc_timing.py
+```
 
 ## Truck collision and completion
 

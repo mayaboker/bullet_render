@@ -13,6 +13,8 @@ dev = ["pytest>=9,<10", "pyzmq>=27,<28", "jsonschema>=4,<5"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Make the isaac/ renderer package importable under the documented bare pytest command.
+pythonpath = ["."]
 
 [tool.uv.sources]
 bullet-msgs = { workspace = true }
