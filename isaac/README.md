@@ -4,8 +4,9 @@ Use `/home/user/isaacsim5.0` (Isaac 5.0, Python 3.11) as an alternate renderer.
 PyBullet owns drone motion, RC stabilization, episode state and takeoff settings.
 Isaac owns the visible world, camera images, spectator controls and truck-contact queries.
 The app and MCAP recorder retain their existing transport interfaces.
-[docs/isaac-renderer-map.html](docs/isaac-renderer-map.html) draws the processes,
-threads, ports and per-frame timing described below; open it in a browser.
+[docs/isaac-renderer-map.md](docs/isaac-renderer-map.md) maps the processes,
+threads, ports and per-frame timing described below (Mermaid diagram; the same map as a
+standalone page is [docs/isaac-renderer-map.html](docs/isaac-renderer-map.html)).
 
 ## Launch
 
