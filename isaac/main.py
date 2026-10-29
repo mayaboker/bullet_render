@@ -1,6 +1,5 @@
 """Isaac Sim 5.0 render-only backend. Launch with Isaac's python.sh."""
 import argparse
-import json
 import os
 from pathlib import Path
 import sys
@@ -8,8 +7,6 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
-# Default red-truck origin per USD world file name, in Bullet metres on that world's surface.
-WORLD_PRESETS = ROOT / 'isaac' / 'world_presets.json'
 IDLE_UI_PERIOD_S = 0.1
 POSE_POLL_PERIOD_S = 0.002
 # Isaac has its own Python 3.11; never import the workspace's 3.12 site-packages.
@@ -18,24 +15,14 @@ sys.path.insert(0, str(ROOT.parent / 'bullet_msgs' / 'src'))
 sys.path.insert(0, str(ROOT))
 
 
-def world_preset(world):
-    """Preset entry for the world's file name, or an empty dict without a world or entry."""
-    if world is None:
-        return {}
-    presets = json.loads(WORLD_PRESETS.read_text())
-    entry = presets.get(Path(world).name, {})
-    if not isinstance(entry, dict):
-        raise ValueError(f'invalid world preset for {Path(world).name}')
-    return entry
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--transport-config', type=Path, default=ROOT / 'configs/transport.json')
     parser.add_argument('--headless', action='store_true')
     parser.add_argument('--seconds', type=float, help='Exit after this many seconds after initialization')
     parser.add_argument('--world', type=Path, help='USD world file; source is referenced without saving changes')
-    parser.add_argument('--spawn', type=float, nargs=3, metavar=('X', 'Y', 'Z'), help='Initial Bullet world position in metres; requires stopped physics')
+    parser.add_argument('--spawn', type=float, nargs=3, metavar=('X', 'Y', 'Z'),
+                        help='Initial Bullet world position in metres; requires stopped physics. Default is the world preset, if any')
     parser.add_argument('--takeoff-height', type=float, help='Relative climb in metres (0.1–100), confirmed by physics before Start')
     parser.add_argument('--target', type=float, nargs=3, metavar=('X', 'Y', 'Z'),
                         help='Red truck origin in Bullet metres; default is the world preset or 40 0 0')
@@ -45,13 +32,18 @@ def main():
     from transport import Receiver, Publisher, camera_pose
     from bullet_msgs.spawn import validate_position, validate_takeoff_height
     from isaac.scenario import DEFAULT_TARGET_M, vector
+    from isaac.presets import world_preset
     try:
         if args.spawn is not None:
             validate_position(args.spawn)
         if args.takeoff_height is not None:
             validate_takeoff_height(args.takeoff_height)
+        preset = world_preset(args.world)
+        if args.spawn is None and 'spawn_m' in preset:
+            args.spawn = list(vector(preset['spawn_m']))
+            validate_position(args.spawn)
         if args.target is None:
-            args.target = world_preset(args.world).get('target_m', DEFAULT_TARGET_M)
+            args.target = preset.get('target_m', DEFAULT_TARGET_M)
         args.target = vector(args.target)
     except ValueError as error:
         parser.error(str(error))

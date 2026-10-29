@@ -27,9 +27,17 @@ Omitting them preserves physics' applied settings.
 
 Without `--target`, the truck origin comes from `isaac/world_presets.json`, keyed
 by the world's file name, and otherwise defaults to `40 0 0`. Rivermark's preset
-puts the truck on the road at `71.313 -26.666 5.643`; edit that file to add a
-world or change its spot. The preset only sets the truck; the starting position
-stays whatever physics has applied.
+puts the truck on the road at `71.313 -26.666 5.643`. Without `--spawn`, a
+preset `spawn_m` is applied the same way as `--spawn` once physics is stopped;
+Rivermark starts at `10 0 5.807` (asphalt at 5.792 m plus the Snap clearance).
+Starting at the origin faces a thin red post at the bottom-left of the front
+camera: the app's largest-red-contour detector then alternates between that post
+and the distant truck, the post is rejected as clipped, the yaw command flips
+sign every few frames, and the merged app's centering step never settles, so the
+search times out after 34 s and physics stops with `app_withdrawn`. From 10 m
+along +X the post is out of view and the same truck is centered and approached.
+Edit that file to add a world or change either spot; a world without a preset
+keeps whatever starting position physics has applied.
 
 A complete command-line session, each in its own terminal, is physics, then the
 app with the Isaac profile, then the recorder, then this renderer. Physics and
@@ -47,7 +55,9 @@ uv run --locked --all-packages --all-extras --all-groups bullet-app \
 ```
 
 For a fresh checkout, install transport dependencies separately from Isaac and
-the shared Python environment (no system installation):
+the shared Python environment (no system installation). They live under the
+ignored `build/` tree, so wiping `build/` to reset the native CMake caches
+removes them too; rerun this command afterwards:
 
 ```bash
 /home/user/isaacsim5.0/python.sh -m pip install \
@@ -189,10 +199,11 @@ uv run --locked --all-packages --all-extras --all-groups \
 uv run --locked --all-packages --all-extras --all-groups \
   python tools/check_isaac_flight.py --gui --app-debug --takeoff-height 6 \
   --report-dir /tmp/bullet-isaac-custom-height
-# Rivermark on its surface with the Isaac profile: acquisition and approach with measured image ages.
+# Rivermark with the preset truck and the Isaac profile: search, centering, acquisition
+# and approach with measured image ages; search-phase frames are saved per vision verdict.
 uv run --locked --all-packages --all-extras --all-groups \
-  python tools/check_isaac_flight.py --gui --world /home/user/ov/rivermark.usd \
-  --spawn 0 0 5.765 --takeoff-height 11 --target 40 0 5.852 \
+  python tools/check_isaac_flight.py --gui --app-debug --world /home/user/ov/rivermark.usd \
+  --spawn 10 0 5.807 --takeoff-height 11 \
   --mission-config isaac/mission_profile.json --report-dir /tmp/bullet-isaac-rivermark
 # Dropped-first-report recovery, confirmed completion, late app, reset and MCAP.
 uv run --locked --all-packages --all-extras --all-groups \

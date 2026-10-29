@@ -77,6 +77,8 @@ def main():
             latest, phases, reasons, ages, search_ages = {}, [], Counter(), [], []
             recent_frames, saved_frames, bbox_log = {}, 0, Counter()
             MAX_SAVED_FRAMES = 12
+            MAX_SEARCH_FRAMES_PER_REASON = 4
+            search_frames_saved = Counter()
             started = False
             second_viewport_sent = False
             approach_started = None
@@ -119,10 +121,25 @@ def main():
                         if not phases or phases[-1] != phase:
                             phases.append(phase)
                             print('Mission', phase, value['reason'], flush=True)
-                        if phase in ('WAIT_TARGET', 'YAW_SEARCH', 'YAW_SETTLE', 'LOS_ACQUIRE', 'LOS_APPROACH'):
-                            reason = value['diagnostics'].get('vision_reason')
+                        if phase in ('WAIT_TARGET', 'YAW_SEARCH', 'YAW_CENTER', 'YAW_SETTLE', 'LOS_ACQUIRE', 'LOS_APPROACH'):
+                            diagnostics = value['diagnostics']
+                            reason = diagnostics.get('vision_reason')
                             reasons[str(reason)] += 1
                             trace.write(json.dumps(value) + '\n')
+                            # Keep a few search-phase frames per vision verdict so a rejected
+                            # detection (for example a red curb merged with the truck) can be seen.
+                            bbox = diagnostics.get('processed_bbox')
+                            sequence = diagnostics.get('processed_image_sequence')
+                            if bbox is not None and search_frames_saved[reason] < MAX_SEARCH_FRAMES_PER_REASON:
+                                pixels = next((frame for key, frame in recent_frames.items() if key[1] == sequence), None)
+                                if pixels is not None:
+                                    import cv2
+                                    import numpy as np
+                                    x, y, w, h = (int(round(v)) for v in bbox)
+                                    frame = cv2.cvtColor(np.frombuffer(pixels, dtype=np.uint8).reshape(480, 640, 3), cv2.COLOR_RGB2BGR)
+                                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 255), 2)
+                                    cv2.imwrite(str(args.report_dir / f'search_{reason}_{search_frames_saved[reason]:02d}.png'), frame)
+                                    search_frames_saved[reason] += 1
                 mission = latest.get(b'app/drone_1/mission', {})
                 state = latest.get(b'simulation/state', {})
                 if images.poll(5):
@@ -170,7 +187,7 @@ def main():
                     report.update(passed=approach_verified or completed, phases=phases, vision_reasons=dict(reasons),
                                   image_age_ms=dict(median=statistics.median(ages), p90=sorted(ages)[int(len(ages) * .9)], max=max(ages), n=len(ages)) if ages else None,
                                   world=str(args.world) if args.world else None, spawn=args.spawn, target=args.target, mission_config=str(args.mission_config),
-                                  los_bboxes=dict(bbox_log), clipped_frames_saved=saved_frames,
+                                  los_bboxes=dict(bbox_log), clipped_frames_saved=saved_frames, search_frames_saved=dict(search_frames_saved),
                                   last_mission=mission, search_frame_count=len(search_ages),
                                   search_image_age_ms=search_ages[-100:],
                                   approach_verified_s=mission['simulation_time_s'] - approach_started if approach_started is not None else 0,
