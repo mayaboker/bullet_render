@@ -35,6 +35,9 @@ class TrajectorySimulation:
     def __init__(self, config, settings, vehicle):
         self.codec = RcCodec(len(vehicle.rotor_positions_m) * vehicle.max_thrust_per_rotor_n, settings.max_rates_rad_s, config.rc)
         self.points = json.loads(Path(sys.argv[2]).read_text())
+        if '--respect-spawn' in sys.argv:
+            start = list(config.drone.initial_position_m)
+            self.points = [start, [start[0] + 10, start[1], start[2]]]
         self.last_command = None
 
     def reset(self):

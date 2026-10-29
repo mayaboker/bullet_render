@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Architecture and frame-timing map of the Isaac renderer. Standalone: open in a browser. -->
+<title>Isaac Renderer Map</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column; figures scroll sideways on narrow screens; tables below. */
+:root {
+  --bg: #f7f6f2;
+  --fg: #1f2429;
+  --muted: #5b6570;
+  --surface: #ffffff;
+  --line: #c9cfd4;
+  --accent: #0b7285;        /* the image path: the hop whose latency the lease pays for */
+  --warn: #b4411a;          /* expiry bound */
+  --font-body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15191d; --fg: #e6e9ec; --muted: #9aa5b0; --surface: #1d2328; --line: #3a434b;
+    --accent: #4cc3d9; --warn: #f08a5d; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15191d; --fg: #e6e9ec; --muted: #9aa5b0; --surface: #1d2328; --line: #3a434b;
+  --accent: #4cc3d9; --warn: #f08a5d; color-scheme: dark;
+}
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 56px;
+}
+main { max-width: 1140px; margin: 0 auto; display: grid; gap: 40px; }
+header p, section > p { max-width: 68ch; }
+h1 { font-size: 28px; font-weight: 600; margin: 0 0 8px; text-wrap: balance; }
+h2 { font-size: 19px; font-weight: 600; margin: 0 0 10px; text-wrap: balance; }
+p { margin: 0 0 10px; }
+.eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+code, .mono { font-family: var(--font-mono); font-size: .92em; }
+figure { margin: 0; }
+.scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); padding: 12px; }
+svg { display: block; max-width: 100%; height: auto; min-width: 720px; font-family: var(--font-body); }
+svg .mono { font-family: var(--font-mono); }
+svg text { font-size: 12px; fill: currentColor; }
+svg text.small { font-size: 11px; fill: var(--muted); }
+svg text.title { font-size: 13px; font-weight: 600; }
+svg rect.box { fill: var(--bg); stroke: currentColor; stroke-width: 1.2; }
+svg rect.boundary { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 6 4; }
+svg line, svg path.flow { stroke: currentColor; stroke-width: 1.4; fill: none; }
+svg .accent { stroke: var(--accent); }
+svg text.accent { fill: var(--accent); stroke: none; }
+svg .warn { stroke: var(--warn); }
+svg text.warn { fill: var(--warn); stroke: none; }
+figcaption { font-size: 14px; color: var(--muted); margin-top: 10px; max-width: 80ch; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+th { font-weight: 600; font-size: 13px; color: var(--muted); }
+td:first-child { font-family: var(--font-mono); font-size: 13px; white-space: nowrap; }
+.tables { display: grid; gap: 28px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.tables > div { min-width: 0; }
+.wrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div class="eyebrow">bullet_render · isaac/</div>
+  <h1>Isaac Renderer Map</h1>
+  <p>How the Isaac Sim 5.0 renderer in bullet_render sits between physics and the app. Physics owns dynamics and the RC lease. The renderer only receives poses, draws the world and publishes the front-camera image. The app closes the loop with RC commands that never pass through the renderer.</p>
+</header>
+
+<section>
+  <h2>Processes, threads and what moves between them</h2>
+  <figure>
+    <div class="scroll">
+    <svg viewBox="0 0 1152 620" role="img" aria-label="Physics publishes poses to the renderer's receiver thread; the main Kit thread renders and publishes images to bullet_app; bullet_app sends RC with a lease deadline straight back to physics.">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+        <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+        </marker>
+      </defs>
+
+      <!-- Physics -->
+      <rect class="box" x="24" y="120" width="160" height="300" rx="3"/>
+      <text class="title" x="104" y="145" text-anchor="middle">Physics</text>
+      <text class="small mono" x="104" y="162" text-anchor="middle">bullet_drone external_rc</text>
+      <text x="104" y="195" text-anchor="middle">PyBullet at 240 Hz</text>
+      <text x="104" y="215" text-anchor="middle">feedback at 120 Hz</text>
+      <text x="104" y="235" text-anchor="middle">expects RC at 100 Hz</text>
+      <text x="104" y="255" text-anchor="middle">FlightLease deadline</text>
+      <text x="104" y="275" text-anchor="middle">spawn / takeoff settings</text>
+      <text x="104" y="295" text-anchor="middle">stops on truck contact</text>
+
+      <!-- Renderer process boundary -->
+      <rect class="boundary" x="268" y="40" width="600" height="520" rx="6"/>
+      <text class="title" x="280" y="62">Isaac renderer process</text>
+      <text class="small mono" x="280" y="79">isaac/main.py under Isaac python.sh (Python 3.11, zero-delay Kit experience)</text>
+
+      <!-- Receiver thread -->
+      <rect class="box" x="296" y="100" width="230" height="180" rx="3"/>
+      <text class="title" x="411" y="124" text-anchor="middle">Receiver worker thread</text>
+      <text class="small mono" x="411" y="140" text-anchor="middle">transport.py · scenario.py</text>
+      <text x="411" y="165" text-anchor="middle">ZeroMQ SUB → latest-only raw slots</text>
+      <text x="411" y="185" text-anchor="middle">bounded command queue (8)</text>
+      <text x="411" y="205" text-anchor="middle">spawn request retries, 4.5 s give-up</text>
+      <text x="411" y="225" text-anchor="middle">ContactSession: sphere sweep</text>
+      <text x="411" y="245" text-anchor="middle">against truck bounds → report, stop</text>
+      <text class="small" x="411" y="266" text-anchor="middle">touches no Kit or USD objects</text>
+
+      <!-- Main thread -->
+      <rect class="box" x="580" y="100" width="260" height="240" rx="3"/>
+      <text class="title" x="710" y="124" text-anchor="middle">Main thread, Kit update loop</text>
+      <text class="small mono" x="710" y="140" text-anchor="middle">main.py · scene.py</text>
+      <text x="710" y="165" text-anchor="middle">poll(): decode, JSON-schema validate</text>
+      <text x="710" y="185" text-anchor="middle">Scene.update_pose: drone marker,</text>
+      <text x="710" y="205" text-anchor="middle">red truck boxes, referenced USD world</text>
+      <text x="710" y="225" text-anchor="middle">Camera.set_world_pose (X fwd, Z up)</text>
+      <text x="710" y="245" text-anchor="middle">application.update(): zero-delay render</text>
+      <text x="710" y="265" text-anchor="middle">camera.get_rgba() 640×480</text>
+      <text x="710" y="285" text-anchor="middle">surface_height() for Snap buttons</text>
+      <text class="small" x="710" y="306" text-anchor="middle">idle: UI pump at 10 Hz, no PhysX scene</text>
+
+      <!-- Controls -->
+      <rect class="box" x="296" y="400" width="230" height="140" rx="3"/>
+      <text class="title" x="411" y="424" text-anchor="middle">Controls window (omni.ui)</text>
+      <text class="small mono" x="411" y="440" text-anchor="middle">controls.py</text>
+      <text x="411" y="465" text-anchor="middle">Start / Stop / Reset</text>
+      <text x="411" y="485" text-anchor="middle">Apply spawn XYZ + takeoff height</text>
+      <text x="411" y="505" text-anchor="middle">Apply target XYZ, Snap Z to surface</text>
+      <text x="411" y="525" text-anchor="middle">Perspective / Front camera, Load world</text>
+
+      <!-- Publisher -->
+      <rect class="box" x="580" y="400" width="260" height="140" rx="3"/>
+      <text class="title" x="710" y="424" text-anchor="middle">Publisher</text>
+      <text class="small mono" x="710" y="440" text-anchor="middle">transport.py · bullet_msgs.shm</text>
+      <text x="710" y="465" text-anchor="middle">SHM FrameWriter RGB8 + descriptor</text>
+      <text x="710" y="485" text-anchor="middle">ZeroMQ PUB bind 5556, SNDHWM 8</text>
+      <text x="710" y="505" text-anchor="middle">capture_ns = physics measurement_us</text>
+      <text x="710" y="525" text-anchor="middle">drops frame if receipt age &gt; 0.1 s</text>
+
+      <!-- bullet_app -->
+      <rect class="box" x="950" y="120" width="166" height="420" rx="3"/>
+      <text class="title" x="1033" y="145" text-anchor="middle">bullet_app</text>
+      <text class="small mono" x="1033" y="162" text-anchor="middle">sibling process</text>
+      <rect class="box" x="960" y="185" width="146" height="44" rx="2"/>
+      <text x="1033" y="204" text-anchor="middle">RC publisher</text>
+      <text class="small" x="1033" y="220" text-anchor="middle">100 Hz, PUB 5559</text>
+      <line x1="1033" y1="270" x2="1033" y2="229" marker-end="url(#arrow)"/>
+      <text class="small" x="1040" y="254">RC</text>
+      <rect class="box" x="960" y="270" width="146" height="86" rx="2"/>
+      <text x="1033" y="289" text-anchor="middle">Mission + LosNavigator</text>
+      <text class="small" x="1033" y="305" text-anchor="middle">ACQUIRE / TRACK /</text>
+      <text class="small" x="1033" y="319" text-anchor="middle">RECOVER / FAULT</text>
+      <text class="small" x="1033" y="333" text-anchor="middle">bearing + image-age gate</text>
+      <text class="small" x="1033" y="347" text-anchor="middle">profile: 0.2 s image age</text>
+      <line x1="1033" y1="406" x2="1033" y2="356" marker-end="url(#arrow)"/>
+      <text class="small" x="1040" y="385">bbox</text>
+      <rect class="box" x="960" y="406" width="146" height="70" rx="2"/>
+      <text x="1033" y="425" text-anchor="middle">Detector</text>
+      <text class="small" x="1033" y="441" text-anchor="middle">HSV red threshold</text>
+      <text class="small" x="1033" y="455" text-anchor="middle">largest contour</text>
+      <text class="small" x="1033" y="469" text-anchor="middle">→ bounding box</text>
+      <text class="small" x="1033" y="500" text-anchor="middle">bbox + mission also PUB 5558</text>
+      <text class="small" x="1033" y="515" text-anchor="middle">debug window draws the</text>
+      <text class="small" x="1033" y="529" text-anchor="middle">yellow box from this bbox</text>
+
+      <!-- A1 physics -> receiver -->
+      <line x1="184" y1="150" x2="296" y2="150" marker-end="url(#arrow)"/>
+      <text class="small" x="240" y="141" text-anchor="middle">5555 telemetry</text>
+      <text class="small" x="240" y="166" text-anchor="middle">pose, state, spawn</text>
+
+      <!-- A2 receiver -> physics -->
+      <line x1="296" y1="240" x2="184" y2="240" marker-end="url(#arrow)"/>
+      <text class="small" x="240" y="231" text-anchor="middle">5557 control</text>
+      <text class="small" x="240" y="256" text-anchor="middle">start/stop/reset,</text>
+      <text class="small" x="240" y="270" text-anchor="middle">spawn, collision</text>
+
+      <!-- A3 receiver -> main -->
+      <line x1="526" y1="150" x2="580" y2="150" marker-end="url(#arrow)"/>
+      <text class="small" x="553" y="141" text-anchor="middle">poll()</text>
+
+      <!-- A4 controls -> receiver -->
+      <line x1="360" y1="400" x2="360" y2="280" marker-end="url(#arrow)"/>
+      <text class="small mono" x="368" y="333">command()</text>
+      <text class="small mono" x="368" y="348">apply_spawn()</text>
+      <text class="small mono" x="368" y="363">set_target()</text>
+
+      <!-- A5 controls -> scene -->
+      <path class="flow" d="M 480 400 V 382 H 640 V 340" marker-end="url(#arrow)"/>
+      <text class="small" x="560" y="360" text-anchor="middle">scene calls:</text>
+      <text class="small" x="560" y="374" text-anchor="middle">snap Z, camera, world</text>
+
+      <!-- A6 main -> publisher -->
+      <line class="accent" x1="800" y1="340" x2="800" y2="400" marker-end="url(#arrow-accent)"/>
+      <text class="small accent" x="792" y="366" text-anchor="end">RGB8 pixels +</text>
+      <text class="small accent" x="792" y="380" text-anchor="end">source pose</text>
+
+      <!-- A7 publisher -> app -->
+      <line class="accent" x1="840" y1="470" x2="950" y2="470" marker-end="url(#arrow-accent)"/>
+      <text class="small accent" x="895" y="461" text-anchor="middle">SHM + 5556</text>
+      <text class="small accent mono" x="895" y="486" text-anchor="middle">camera/front/image</text>
+
+      <!-- A8 app -> physics -->
+      <path class="flow" d="M 1106 207 H 1134 V 592 H 104 V 420" marker-end="url(#arrow)"/>
+      <text class="small" x="568" y="584" text-anchor="middle">5559 RC at 100 Hz, each packet valid until a lease deadline; no valid packet by the deadline → physics freezes with reason rc_expired</text>
+    </svg>
+    </div>
+    <figcaption>The receiver thread owns the sockets and copies bounded raw messages into latest-only slots. The main Kit thread validates them, moves the scene and camera, renders and publishes. Teal marks the image path, the only hop whose latency the RC lease pays for. Inside bullet_app the image goes to the detector, its bounding box to the mission, and the mission's RC command to physics; the RC return path bypasses the renderer entirely.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2>Where a frame's time goes</h2>
+  <p>During an approach the app caps each RC packet's validity at the frame's capture time plus the profile's image-age bound. Render time therefore eats directly into the lease margin. Measured on Rivermark with the app debug window open.</p>
+  <figure>
+    <div class="scroll">
+    <svg viewBox="-70 0 1070 300" role="img" aria-label="Timeline in milliseconds after the physics measurement: Isaac renders in about 40 ms, the app receives the frame at 59 to 73 ms, and the RC lease expires at 100 ms with the Godot profile or 200 ms with the Isaac profile.">
+      <defs>
+        <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <!-- grid -->
+      <g stroke="var(--line)" stroke-width="1">
+        <line x1="90" y1="50" x2="90" y2="262"/><line x1="170" y1="50" x2="170" y2="262"/><line x1="250" y1="50" x2="250" y2="262"/>
+        <line x1="330" y1="50" x2="330" y2="262"/><line x1="410" y1="50" x2="410" y2="262"/><line x1="490" y1="50" x2="490" y2="262"/>
+        <line x1="570" y1="50" x2="570" y2="262"/><line x1="650" y1="50" x2="650" y2="262"/><line x1="730" y1="50" x2="730" y2="262"/>
+        <line x1="810" y1="50" x2="810" y2="262"/><line x1="890" y1="50" x2="890" y2="262"/><line x1="970" y1="50" x2="970" y2="262"/>
+      </g>
+      <!-- axis -->
+      <line x1="90" y1="262" x2="985" y2="262" marker-end="url(#arrow2)"/>
+      <g class="small" text-anchor="middle">
+        <text class="small" x="90" y="282">0</text><text class="small" x="170" y="282">20</text><text class="small" x="250" y="282">40</text>
+        <text class="small" x="330" y="282">60</text><text class="small" x="410" y="282">80</text><text class="small" x="490" y="282">100</text>
+        <text class="small" x="570" y="282">120</text><text class="small" x="650" y="282">140</text><text class="small" x="730" y="282">160</text>
+        <text class="small" x="810" y="282">180</text><text class="small" x="890" y="282">200</text><text class="small" x="970" y="282">220 ms</text>
+      </g>
+
+      <!-- row 1: measurement -->
+      <text class="title" x="82" y="74" text-anchor="end">Physics measurement</text>
+      <circle cx="90" cy="70" r="5" fill="currentColor"/>
+      <text class="small" x="102" y="74">capture_ns stamped here</text>
+
+      <!-- row 2: render -->
+      <text class="title" x="82" y="118" text-anchor="end">Isaac render</text>
+      <rect x="98" y="106" width="160" height="16" fill="currentColor" opacity=".75"/>
+      <rect x="258" y="106" width="80" height="16" fill="none" stroke="currentColor" stroke-dasharray="4 3"/>
+      <text class="small" x="178" y="100" text-anchor="middle">40 ms, one viewport</text>
+      <text class="small" x="298" y="137" text-anchor="middle">+20 ms with a second full-size viewport</text>
+
+      <!-- row 3: age at app -->
+      <text class="title" x="82" y="178" text-anchor="end">Frame age at app</text>
+      <line x1="326" y1="166" x2="326" y2="184" stroke-width="3"/>
+      <line x1="382" y1="166" x2="382" y2="184" stroke-width="3"/>
+      <text class="small" x="326" y="160" text-anchor="middle">59 median</text>
+      <text class="small" x="382" y="160" text-anchor="end" dx="34">73 p90</text>
+      <line class="accent" x1="414" y1="166" x2="414" y2="184" stroke-width="3"/>
+      <line class="accent" x1="466" y1="166" x2="466" y2="184" stroke-width="3"/>
+      <text class="small accent" x="440" y="199" text-anchor="middle">81 / 94 with second viewport</text>
+
+      <!-- row 4: lease -->
+      <text class="title" x="82" y="228" text-anchor="end">Lease valid until</text>
+      <line class="warn" x1="90" y1="218" x2="490" y2="218" stroke-width="4"/>
+      <line class="warn" x1="490" y1="210" x2="490" y2="226" stroke-width="2"/>
+      <text class="small warn" x="498" y="222">Godot profile, capture + 0.1 s</text>
+      <line class="warn" x1="90" y1="242" x2="890" y2="242" stroke-width="4" opacity=".55"/>
+      <line class="warn" x1="890" y1="234" x2="890" y2="250" stroke-width="2"/>
+      <text class="small warn" x="882" y="236" text-anchor="end">Isaac profile, capture + 0.2 s</text>
+    </svg>
+    </div>
+    <figcaption>One frame from measurement to lease expiry. With the 0.1 s bound a 59 ms image leaves about 40 ms for detection, navigation and transport, and the replay check expires at 70 ms of camera delay. The Isaac profile's 0.2 s bound holds up to about 150 ms in replay and expires near 190 ms.</figcaption>
+  </figure>
+</section>
+
+<section class="tables">
+  <div>
+    <h2>Modules</h2>
+    <div class="wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th><th>Thread</th></tr></thead>
+      <tbody>
+        <tr><td>isaac/main.py</td><td>CLI, SimulationApp with the zero-delay experience, capture loop, startup spawn from the CLI, stats every 5 s.</td><td>main</td></tr>
+        <tr><td>isaac/transport.py</td><td>Receiver worker, Publisher, schema decode, pose to camera pose conversion.</td><td>worker + main</td></tr>
+        <tr><td>isaac/scene.py</td><td>USD stage, world reference with unit and up-axis conversion, empty instancer pruning, truck boxes, surface_height, viewport cameras, DroneMarker.</td><td>main</td></tr>
+        <tr><td>isaac/controls.py</td><td>omni.ui window, Apply and Snap actions, enable state while physics runs.</td><td>main</td></tr>
+        <tr><td>isaac/scenario.py</td><td>Truck bounds, sphere sweep, ContactSession completion.</td><td>worker</td></tr>
+        <tr><td>isaac/surface.py</td><td>Pure triangle math under a vertical line; unit tested.</td><td>any</td></tr>
+        <tr><td>isaac/world_presets.json</td><td>Default truck origin per world file name.</td><td>config</td></tr>
+        <tr><td>isaac/mission_profile.json</td><td>Navigator profile for the app with a 0.2 s image-age bound.</td><td>config</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+  <div>
+    <h2>Ports and topics</h2>
+    <div class="wrap">
+    <table>
+      <thead><tr><th>Port</th><th>Direction for the renderer</th><th>Payload</th></tr></thead>
+      <tbody>
+        <tr><td>5555</td><td>SUB from physics</td><td>render/drone_1/config, render/drone_1/pose, simulation/state, spawn state</td></tr>
+        <tr><td>5557</td><td>send to physics</td><td>start, stop, reset, spawn request, collision report</td></tr>
+        <tr><td>5556</td><td>PUB bind, read by the app</td><td>camera/front/image descriptor; pixels in POSIX shared memory</td></tr>
+        <tr><td>5558</td><td>not used</td><td>app bbox, mission and LOS telemetry</td></tr>
+        <tr><td>5559</td><td>not used</td><td>RC from the app to physics</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p style="margin-top:14px">Checks: <code>tests/test_isaac_*.py</code> run without Isaac. <code>tools/check_isaac_world.py</code>, <code>check_isaac_renderer.py</code>, <code>check_isaac_scenario.py</code> and <code>check_isaac_flight.py</code> need Isaac's python.sh and run on isolated ports through <code>tools/isaac_control_probe.py</code>.</p>
+  </div>
+</section>
+</main>
+</body>
+</html>

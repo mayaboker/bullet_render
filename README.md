@@ -375,7 +375,7 @@ uv run --locked --all-packages --all-extras --all-groups python tools/check_app_
 ```
 
 The test probe prepares a terrain-cleared scenario behind the truck using the
-existing panel and Apply acknowledgement. The first case verifies search, yaw
-settling, new-heading LOS acquisition/approach and the app-loss watchdog; the
+existing panel and Apply acknowledgement. The first case verifies search, horizontal centering within +/-10 pixels, yaw
+settling, centered-heading LOS acquisition/approach and the app-loss watchdog; the
 second hides the rendered truck and verifies full-circle exhaustion/freeze.
 Reports, screenshots and logs are retained in the specified report directory.
