@@ -2,6 +2,7 @@
 #include <bullet_msgs/shm.hpp>
 #include <bullet_msgs/control.hpp>
 #include <bullet_msgs/spawn.hpp>
+#include <bullet_msgs/wind.hpp>
 #include <deque>
 #include <godot_cpp/classes/json.hpp>
 #include <godot_cpp/core/class_db.hpp>
@@ -97,6 +98,29 @@ bool valid_spawn_state(const Dictionary &d) {
     return (result == "idle" || result == "applied" || result == "rejected") && reason.length() > 0 && reason.length() <= 256 &&
         ((d["request_id"].get_type() == Variant::NIL) == (result == "idle"));
 }
+bool valid_wind_settings(const Dictionary &d) {
+    if (!shape(d, {"enabled", "behavior", "velocity_world_m_s", "gust_stddev_m_s", "correlation_time_s", "seed"}) ||
+        d["enabled"].get_type() != Variant::BOOL || d["behavior"].get_type() != Variant::STRING ||
+        !vector(d["velocity_world_m_s"], 3, 1e12) || !vector(d["gust_stddev_m_s"], 3, 1e12) ||
+        !number(d["correlation_time_s"], 0, 1e12) || double(d["correlation_time_s"]) <= 0 ||
+        !number(d["seed"], -MAX_SEQUENCE, MAX_SEQUENCE, true)) return false;
+    const String behavior = d["behavior"];
+    const Array deviations = d["gust_stddev_m_s"];
+    for (int i = 0; i < 3; ++i) if (double(deviations[i]) < 0) return false;
+    return behavior == "constant" || behavior == "gusts";
+}
+bool valid_wind_state(const Dictionary &d) {
+    if (!shape(d, {"schema_version", "physics_id", "episode_id", "controller_id", "request_id", "settings", "velocity_world_m_s", "simulation_time_s", "result", "reason"}) ||
+        !number(d["schema_version"], 1, 1, true) || !control_identity(d["physics_id"]) || !control_identity(d["episode_id"]) ||
+        (d["controller_id"].get_type() != Variant::NIL && !control_identity(d["controller_id"])) ||
+        (d["request_id"].get_type() != Variant::NIL && !control_identity(d["request_id"])) ||
+        d["settings"].get_type() != Variant::DICTIONARY || !valid_wind_settings(d["settings"]) ||
+        !vector(d["velocity_world_m_s"], 3, 1e12) || !number(d["simulation_time_s"], 0, 1e12) ||
+        d["result"].get_type() != Variant::STRING || d["reason"].get_type() != Variant::STRING) return false;
+    const String result = d["result"], reason = d["reason"];
+    return (result == "idle" || result == "applied" || result == "rejected") && reason.length() > 0 && reason.length() <= 256 &&
+        ((d["request_id"].get_type() == Variant::NIL) == (result == "idle"));
+}
 bool valid_config(const Dictionary &d) {
     if (!shape(d, {"schema_version", "stream_id", "camera", "fps"}) ||
         !number(d["schema_version"], 1, 1, true) || !text(d["stream_id"]) ||
@@ -185,11 +209,12 @@ Dictionary parse(const std::string &raw) {
 
 struct ZmqCameraAdapter::Impl {
     std::mutex mutex;
-    std::string config_slot, pose_slot, collision_pose_slot, state_slot, collision_outgoing, spawn_slot, spawn_outgoing;
-    Clock::time_point state_received{}, valid_state_received{}, spawn_received{}, valid_spawn_received{};
+    std::string config_slot, pose_slot, collision_pose_slot, state_slot, collision_outgoing, spawn_slot, spawn_outgoing, wind_slot, wind_outgoing;
+    Clock::time_point state_received{}, valid_state_received{}, spawn_received{}, valid_spawn_received{}, wind_received{}, valid_wind_received{};
     std::deque<std::pair<std::string, int64_t>> commands;
     std::string controller_id = std::to_string(getpid()) + "-" + std::to_string(Clock::now().time_since_epoch().count());
-    Dictionary control_state, spawn_state;
+    Dictionary control_state, spawn_state, wind_state;
+    Clock::time_point next_health{};
     String control_error;
     Clock::time_point pose_received{}, capture_received{};
     std::atomic<int64_t> invalid{0}, superseded{0};
@@ -197,6 +222,7 @@ struct ZmqCameraAdapter::Impl {
     int64_t collision_sequence = -1;
     String collision_episode, collision_stream;
     int64_t frame_bytes = 0, busy_slots = 0, publication_drops = 0;
+    double source_age_ms = -1.0;
     bullet_msgs::FrameWriter images;
     bool running = false;
     String error, capture_stream;
@@ -219,6 +245,7 @@ struct ZmqCameraAdapter::Impl {
                 zmq_setsockopt(socket, ZMQ_RCVHWM, &TELEMETRY_HWM, sizeof(TELEMETRY_HWM)) ||
                 zmq_setsockopt(socket, ZMQ_MAXMSGSIZE, &max_size, sizeof(max_size)) ||
                 zmq_setsockopt(socket, ZMQ_SUBSCRIBE, "render/drone_1/", 15) ||
+                zmq_setsockopt(socket, ZMQ_SUBSCRIBE, bullet_msgs::WIND_STATE_TOPIC, sizeof(bullet_msgs::WIND_STATE_TOPIC) - 1) ||
                 zmq_setsockopt(socket, ZMQ_SUBSCRIBE, bullet_msgs::SPAWN_STATE_TOPIC, sizeof(bullet_msgs::SPAWN_STATE_TOPIC) - 1) ||
                 zmq_setsockopt(socket, ZMQ_SUBSCRIBE, bullet_msgs::STATE_TOPIC, sizeof(bullet_msgs::STATE_TOPIC) - 1) ||
                 zmq_connect(socket, endpoint.c_str())) throw std::runtime_error(zmq_strerror(zmq_errno()));
@@ -265,6 +292,14 @@ struct ZmqCameraAdapter::Impl {
                         zmq_send(control, spawn.data(), spawn.size(), ZMQ_DONTWAIT) < 0)
                         throw std::runtime_error(zmq_strerror(zmq_errno()));
                 }
+                std::string wind;
+                { std::lock_guard lock(mutex); wind.swap(wind_outgoing); }
+                if (!wind.empty()) {
+                    const auto &topic = bullet_msgs::WIND_REQUEST_TOPIC;
+                    if (zmq_send(control, topic, sizeof(topic) - 1, ZMQ_SNDMORE | ZMQ_DONTWAIT) < 0 ||
+                        zmq_send(control, wind.data(), wind.size(), ZMQ_DONTWAIT) < 0)
+                        throw std::runtime_error(zmq_strerror(zmq_errno()));
+                }
                 zmq_pollitem_t item{socket, 0, ZMQ_POLLIN, 0};
                 int result = zmq_poll(&item, 1, 10);
                 if (result < 0) {
@@ -294,8 +329,10 @@ struct ZmqCameraAdapter::Impl {
                 const bool is_config = topic == "render/drone_1/config";
                 const bool is_state = topic == bullet_msgs::STATE_TOPIC;
                 const bool is_spawn = topic == bullet_msgs::SPAWN_STATE_TOPIC;
-                if (!is_spawn && !is_config && !is_state && topic != "render/drone_1/pose") continue;
+                const bool is_wind = topic == bullet_msgs::WIND_STATE_TOPIC;
+                if (!is_wind && !is_spawn && !is_config && !is_state && topic != "render/drone_1/pose") continue;
                 std::lock_guard lock(mutex);
+                if (is_wind) { wind_slot = std::move(raw); wind_received = Clock::now(); continue; }
                 if (is_spawn) { spawn_slot = std::move(raw); spawn_received = Clock::now(); continue; }
                 if (is_state) { state_slot = std::move(raw); state_received = Clock::now(); continue; }
                 if (is_config) config_slot = std::move(raw);
@@ -324,10 +361,13 @@ void ZmqCameraAdapter::_bind_methods() {
     ClassDB::bind_method(D_METHOD("poll_request"), &ZmqCameraAdapter::poll_request);
     ClassDB::bind_method(D_METHOD("publish_frame", "pixels", "request"), &ZmqCameraAdapter::publish_frame);
     ClassDB::bind_method(D_METHOD("get_stats"), &ZmqCameraAdapter::get_stats);
+    ClassDB::bind_method(D_METHOD("publish_health"), &ZmqCameraAdapter::publish_health);
     ClassDB::bind_method(D_METHOD("publish_control", "action"), &ZmqCameraAdapter::publish_control);
     ClassDB::bind_method(D_METHOD("poll_collision_pose"), &ZmqCameraAdapter::poll_collision_pose);
     ClassDB::bind_method(D_METHOD("publish_collision", "report"), &ZmqCameraAdapter::publish_collision);
     ClassDB::bind_method(D_METHOD("get_control_state"), &ZmqCameraAdapter::get_control_state);
+    ClassDB::bind_method(D_METHOD("publish_wind", "request"), &ZmqCameraAdapter::publish_wind);
+    ClassDB::bind_method(D_METHOD("get_wind_state"), &ZmqCameraAdapter::get_wind_state);
     ClassDB::bind_method(D_METHOD("publish_spawn", "request"), &ZmqCameraAdapter::publish_spawn);
     ClassDB::bind_method(D_METHOD("get_spawn_state"), &ZmqCameraAdapter::get_spawn_state);
     ClassDB::bind_method(D_METHOD("close"), &ZmqCameraAdapter::close);
@@ -489,6 +529,8 @@ bool ZmqCameraAdapter::publish_frame(const PackedByteArray &pixels, const Dictio
             capture_ns = int64_t(source["measurement_us"]) * 1000;
             source_json = JSON::stringify(source, "", true, true).utf8().get_data();
         }
+        impl->source_age_ms = std::chrono::duration<double, std::milli>(Clock::now().time_since_epoch()).count()
+            - static_cast<double>(capture_ns) / 1e6;
         const auto message = impl->images.write(pixels.ptr(), pixels.size(), capture_ns, source_json);
         if (message.empty()) { ++impl->busy_slots; return true; }
         if (zmq_send(impl->publisher, message.data(), message.size(), ZMQ_DONTWAIT) < 0) {
@@ -507,6 +549,7 @@ bool ZmqCameraAdapter::publish_frame(const PackedByteArray &pixels, const Dictio
 Dictionary ZmqCameraAdapter::get_stats() const {
     Dictionary stats;
     stats["frames"] = impl->frames;
+    stats["source_age_ms"] = impl->source_age_ms;
     stats["controller_id"] = String(impl->controller_id.c_str());
     stats["control_error"] = impl->control_error;
     stats["shm_session"] = String(impl->images.session.c_str());
@@ -653,4 +696,61 @@ Dictionary ZmqCameraAdapter::get_spawn_state() {
     for (const auto key : {"physics_id", "episode_id", "controller_id"})
         if (impl->spawn_state[key] != control[key]) return {};
     return impl->spawn_state;
+}
+
+
+bool ZmqCameraAdapter::publish_wind(const Dictionary &request) {
+    if (!impl->running || !shape(request, {"physics_id", "episode_id", "request_id", "settings"}) ||
+        !control_identity(request["physics_id"]) || !control_identity(request["episode_id"]) || !control_identity(request["request_id"]) ||
+        request["settings"].get_type() != Variant::DICTIONARY || !valid_wind_settings(request["settings"])) return false;
+    Dictionary packet = request.duplicate(true);
+    Dictionary settings = packet["settings"];
+    settings["seed"] = int64_t(settings["seed"]);
+    packet["settings"] = settings;
+    packet["schema_version"] = int64_t(1);
+    packet["controller_id"] = String(impl->controller_id.c_str());
+    packet["issued_ms"] = int64_t(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count());
+    const auto raw = JSON::stringify(packet, "", true, true).utf8();
+    if (raw.length() > 4096) return false;
+    std::lock_guard lock(impl->mutex);
+    impl->wind_outgoing.assign(raw.get_data(), raw.length());
+    return true;
+}
+
+Dictionary ZmqCameraAdapter::get_wind_state() {
+    const Dictionary control = get_control_state();
+    std::string raw;
+    Clock::time_point received;
+    { std::lock_guard lock(impl->mutex); raw.swap(impl->wind_slot); received = impl->wind_received; }
+    if (!raw.empty()) {
+        const auto state = parse(raw);
+        if (raw.size() <= 4096 && valid_wind_state(state)) {
+            impl->wind_state = state;
+            impl->valid_wind_received = received;
+        } else ++impl->invalid;
+    }
+    if (!impl->running || control.is_empty() || impl->wind_state.is_empty() ||
+        std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - impl->valid_wind_received).count() > bullet_msgs::WIND_STATE_TIMEOUT_MS) return {};
+    for (const auto key : {"physics_id", "episode_id", "controller_id"})
+        if (impl->wind_state[key] != control[key]) return {};
+    return impl->wind_state;
+}
+
+
+bool ZmqCameraAdapter::publish_health() {
+    const auto now = Clock::now();
+    if (!impl->running || !impl->publisher || now < impl->next_health) return false;
+    const auto state = get_control_state();
+    if (state.is_empty()) return false;
+    impl->next_health = now + std::chrono::seconds(1);
+    Dictionary packet;
+    packet["schema_version"] = int64_t(1);
+    packet["physics_id"] = state["physics_id"];
+    packet["episode_id"] = state["episode_id"];
+    packet["generated_us"] = int64_t(std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count());
+    packet["stats"] = get_stats();
+    const auto raw = JSON::stringify(packet, "", true, true).utf8();
+    constexpr char topic[] = "analysis/render/health";
+    return zmq_send(impl->publisher, topic, sizeof(topic) - 1, ZMQ_SNDMORE | ZMQ_DONTWAIT) >= 0 &&
+        zmq_send(impl->publisher, raw.get_data(), raw.length(), ZMQ_DONTWAIT) >= 0;
 }

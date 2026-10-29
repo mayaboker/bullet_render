@@ -7,6 +7,7 @@ var previous: Dictionary = {}
 var control_action := ""
 var control_sent := false
 var previous_spawn: Dictionary = {}
+var previous_wind: Dictionary = {}
 var previous_control: Dictionary = {}
 
 func _initialize() -> void:
@@ -35,6 +36,13 @@ func _process(_delta: float) -> bool:
 	if control_state != previous_control:
 		print("PROBE ", JSON.stringify({"control_state": control_state}))
 		previous_control = control_state.duplicate()
+	var wind := adapter.get_wind_state()
+	if wind != previous_wind:
+		print("PROBE ", JSON.stringify({"wind_state":wind}))
+		previous_wind = wind.duplicate(true)
+	if not control_sent and control_action in ["wind", "wind_edit"] and not wind.is_empty() and wind.controller_id == adapter.get_stats().controller_id:
+		control_sent = adapter.publish_wind({"physics_id":wind.physics_id,"episode_id":wind.episode_id,
+			"request_id":"native-wind","settings":_wind_settings(wind)})
 	var spawn := adapter.get_spawn_state()
 	if spawn != previous_spawn:
 		print("PROBE ", JSON.stringify({"spawn_state": spawn}))
@@ -42,12 +50,13 @@ func _process(_delta: float) -> bool:
 	if not control_sent and control_action == "spawn" and not spawn.is_empty():
 		control_sent = adapter.publish_spawn({"physics_id": spawn.physics_id, "episode_id": spawn.episode_id,
 			"request_id": "native-pick", "scenario_name": "Hill", "position_m": [12.0, -34.0, 56.789], "takeoff_height_m": 7.5})
-	if not control_sent and control_action != "spawn" and not control_action.is_empty() and not control_state.is_empty():
+	if not control_sent and control_action not in ["spawn", "wind", "wind_edit"] and not control_action.is_empty() and not control_state.is_empty():
 		control_sent = adapter.publish_control(control_action)
 	if not busy:
 		var request := adapter.poll_request()
 		if not request.is_empty():
 			_publish(request)
+	adapter.publish_health()
 	var stats := adapter.get_stats()
 	if stats != previous:
 		print("PROBE ", JSON.stringify(stats))
@@ -77,3 +86,9 @@ func _publish(request: Dictionary) -> void:
 func _finalize() -> void:
 	if adapter != null:
 		adapter.close()
+
+func _wind_settings(wind: Dictionary) -> Dictionary:
+	var settings: Dictionary = wind.settings.duplicate(true)
+	if control_action == "wind_edit":
+		settings.velocity_world_m_s = [3.0, -1.0, 0.0]
+	return settings

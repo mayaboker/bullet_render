@@ -5,7 +5,6 @@ Uses isolated ports and temporary recordings. Run from the shared environment.
 import argparse
 from contextlib import ExitStack
 import json
-import os
 from pathlib import Path
 import signal
 import subprocess
@@ -52,6 +51,8 @@ def main():
                 topic['endpoint'] = transport['control_endpoint']
             elif topic['key'] == 'flight/drone_1/rc':
                 topic['endpoint'] = transport['flight_command_endpoint']
+            elif topic['key'] == 'analysis/render/health':
+                topic['endpoint'] = transport['image_endpoint']
             elif 'endpoint' in topic:
                 topic['endpoint'] = app_endpoint
         (temp / 'recorder.yaml').write_text(yaml.safe_dump(recorder))
@@ -61,8 +62,7 @@ def main():
         sequence = 0
         def launch(name, cmd, cwd):
             log = stack.enter_context((args.report_dir / f'{name}.log').open('w'))
-            env = dict(os.environ, __NV_PRIME_RENDER_OFFLOAD='1', __GLX_VENDOR_LIBRARY_NAME='nvidia')
-            p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT)
+            p = subprocess.Popen(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT)
             processes.append(p)
             return p
         def snapshot():
@@ -106,7 +106,7 @@ def main():
             pending.replace(command_path)
         try:
             launch('recorder', [str(BIN / 'mcap-bagger'), '--config', str(temp / 'recorder.yaml')], ROOT.parent / 'mcap_bagger')
-            launch('godot', ['godot', '--path', str(ROOT / 'godot'), '--script', 'collision_probe.gd', '--',
+            launch('godot', [str(ROOT / 'tools/run_godot.sh'), '--path', str(ROOT / 'godot'), '--script', 'collision_probe.gd', '--',
                              str(command_path), str(state_path), str(temp / 'transport.json'), str(trajectory_path), str(screenshot)], ROOT)
             wait(lambda: trajectory_path.exists(), 'Godot trajectory ready')
             physics = launch('physics', [str(BIN / 'python'), str(ROOT / 'tools/collision_physics_probe.py'), str(temp / 'physics.json'), str(trajectory_path), *(['--reject-collisions'] if args.reject_collisions else [])], ROOT.parent / 'bullet_drone')
@@ -169,7 +169,10 @@ def main():
             terminal_ids = set()
             for path in (temp / 'recordings').glob('*.mcap'):
                 with path.open('rb') as stream:
-                    for _, channel, message in make_reader(stream).iter_messages():
+                    reader = make_reader(stream)
+                    health = next(item for item in reader.iter_metadata() if item.name == 'recording_health')
+                    assert json.loads(health.metadata['complete'])
+                    for _, channel, message in reader.iter_messages():
                         counts[channel.topic] = counts.get(channel.topic, 0) + 1
                         if channel.topic == LOS_TOPIC.decode():
                             packet = validate_los(json.loads(message.data))
@@ -181,6 +184,8 @@ def main():
                         elif channel.topic == 'app/drone_1/mission' and json.loads(message.data)['phase'] == 'COMPLETED':
                             completed_in_bags += 1
             assert all(counts.get(t, 0) > 0 for t in ('flight/drone_1/rc', 'flight/drone_1/feedback', 'app/drone_1/mission', 'camera/front/image', 'render/drone_1/pose')), counts
+            assert all(counts.get(t, 0) > 0 for t in ('analysis/physics/config', 'analysis/app/config', 'analysis/physics/ground_truth', 'analysis/physics/sensors', 'simulation/wind_state', 'analysis/render/health')), counts
+            assert counts.get('camera/front/image/metadata') == counts['camera/front/image'], counts
             assert counts.get('scenario/ended') == 2 and len(terminal_ids) == 2, counts
             assert completed_in_bags >= 2, 'missing final app status'
             assert len(completed_los_episodes) == 2, 'missing final inactive LOS packet'

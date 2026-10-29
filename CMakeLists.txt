@@ -15,6 +15,8 @@ set(GODOTCPP_BUILD_PROFILE
     "${CMAKE_SOURCE_DIR}/build_profile.json"
     CACHE FILEPATH "" FORCE)
 set(GODOTCPP_DISABLE_EXCEPTIONS OFF CACHE BOOL "Native adapter catches errors" FORCE)
+# Share Mesa/LLVM's runtime instead of exporting a conflicting static C++ runtime.
+set(GODOTCPP_USE_STATIC_CPP OFF CACHE BOOL "Use the system shared C++ runtime" FORCE)
 set(CMAKE_PROJECT_INCLUDE "${CMAKE_SOURCE_DIR}/cmake/godot_profile.cmake")
 FetchContent_MakeAvailable(godot_cpp)
 unset(CMAKE_PROJECT_INCLUDE)

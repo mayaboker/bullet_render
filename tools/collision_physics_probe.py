@@ -8,6 +8,7 @@ WORKSPACE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(WORKSPACE / 'bullet_drone'))
 from bullet_drone.models import DroneState, DroneObservation, SensorReadings, BarometerReading
 from bullet_drone.rc import RcCodec
+from bullet_drone.forces.wind import WindModel
 import examples.external_rc.main as runtime
 
 
@@ -39,14 +40,24 @@ class TrajectorySimulation:
             start = list(config.drone.initial_position_m)
             self.points = [start, [start[0] + 10, start[1], start[2]]]
         self.last_command = None
+        self._wind = WindModel(config.wind)
+
+    @property
+    def wind(self):
+        return self._wind.snapshot
+
+    def set_wind(self, settings):
+        self._wind.set_settings(settings, self.step_index * TIMESTEP_S)
 
     def reset(self):
+        self._wind.reset()
         self.episode = uuid4().hex
         self.step_index = 0
         self.last_command = None
         return self._observation()
 
     def step(self, channels):
+        self._wind.velocity(self.step_index * TIMESTEP_S)
         self.step_index += 1
         self.last_command = self.codec.decode(channels, self.episode, self.step_index)
         return self._observation()

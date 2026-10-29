@@ -28,8 +28,12 @@ func _check() -> void:
 		var card: MeshInstance3D = scene.box(scene, item[0], Vector3(1, 1, 0.1), item[1])
 		card.material_override.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		cards.append(card)
+	# Let newly created materials compile before testing immediate camera capture.
+	await RenderingServer.frame_post_draw
+	await process_frame
 	var camera := {"width_px":640, "height_px":480, "fov_x_deg":90}
 	scene._capture({"config":{"camera":camera}, "pose":{"position_m":[0,0,3], "orientation_xyzw":[0,0,0,1], "sequence":1, "stream_id":"test"}})
+	assert(not scene.busy, "Camera capture must complete before window presentation")
 	while scene.busy:
 		await process_frame
 	var rendered: Image = scene.viewport.get_texture().get_image()
@@ -42,10 +46,16 @@ func _check() -> void:
 	assert(image.get_pixel(320, 111).b > 0.9 and image.get_pixel(320, 111).r < 0.1)
 	assert(image.get_pixel(28, 28).b > 0.2 and image.get_pixel(28, 28).b > image.get_pixel(28, 28).r)
 	assert(scene.fpv.get_camera_projection().get_fov() > 89.99 and scene.fpv.get_camera_projection().get_fov() < 90.01)
+	# A second capture must use the new pose immediately, without another scene frame.
+	scene._capture({"config":{"camera":camera}, "pose":{"position_m":[0,0,4], "orientation_xyzw":[0,0,0,1], "sequence":2, "stream_id":"test"}})
+	assert(not scene.busy)
+	var moved: Image = scene.viewport.get_texture().get_image()
+	assert(moved.get_pixel(191, 304).r > 0.9 and moved.get_pixel(191, 304).g < 0.1)
+	assert(moved.get_pixel(191, 240).r < 0.9)
 	for card in cards:
 		card.queue_free()
 	await process_frame
-	scene._capture({"config":{"camera":camera}, "pose":{"position_m":[0,0,3], "orientation_xyzw":[0,0,0,1], "sequence":2, "stream_id":"test"}})
+	scene._capture({"config":{"camera":camera}, "pose":{"position_m":[0,0,3], "orientation_xyzw":[0,0,0,1], "sequence":3, "stream_id":"test"}})
 	while scene.busy:
 		await process_frame
 	var truck_image: Image = scene.viewport.get_texture().get_image()
@@ -73,7 +83,7 @@ func _check() -> void:
 	scene.spectator.look_at(scene.truck.global_position + Vector3.UP * 1.5)
 	await RenderingServer.frame_post_draw
 	root.get_texture().get_image().save_png("/tmp/bullet-render-truck-detail.png")
-	print("Scene normals, RGB/channel orientation, FOV, UI exclusion and red truck at 50 m checks passed")
+	print("Scene normals, RGB/channel orientation, immediate pose/readback, FOV, UI exclusion and red truck at 50 m checks passed")
 	root.remove_child(scene)
 	scene.free()
 	quit()

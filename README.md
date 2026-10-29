@@ -21,6 +21,110 @@ enough to include both; right-drag or scroll to inspect the truck. Scenery,
 including the truck, has no Bullet collision body. Godot detects truck contact
 to end app-owned episodes without applying collision forces.
 
+## Visual overview
+
+![Camera pipeline: physics pose, Godot rendering, shared-memory pixels and app bbox](docs/assets/render-pipeline.svg)
+
+Physics owns simulation time, camera settings and capture cadence. Godot owns
+the landscape, camera transform, rendering and GPU readback. The app owns target
+detection and mission/LOS control. The diagram shows the camera data path; the
+control path is separate: Godot lifecycle commands use **5557**, while app RC
+intent uses **5559**. Endpoint numbers and camera settings are configurable.
+
+### Render flow
+
+```mermaid
+flowchart TD
+    P["Physics step at 240 Hz<br/>Stamp observation once"] --> C{"Camera capture due?<br/>Default: 30 Hz simulation time"}
+    C -->|No| NEXT["Continue physics loop"]
+    C -->|Yes| PUB["Queue latest capture pose<br/>Publish pose on 5555"]
+    PUB --> RX["Native receiver thread<br/>Buffer bounded raw messages"]
+    RX --> MAIN["Godot main thread: poll_request()<br/>Parse and validate config / pose"]
+    MAIN --> VALID{"New valid pose<br/>for the active stream?"}
+    VALID -->|No| SKIP["Skip capture; wait for new data"]
+    VALID -->|Yes| SET["Convert Bullet coordinates<br/>Set drone and forward-camera transform"]
+    SET --> GPU["Render viewport once<br/>Wait for frame_post_draw"]
+    GPU --> RGB["Read back RGB8 image"]
+    RGB --> SHM{"Nonblocking SHM write<br/>Free slot available?"}
+    SHM -->|No| DROP["Drop frame; do not block rendering"]
+    SHM -->|Yes| DESC["Commit pixels + header<br/>Publish descriptor on 5556"]
+    DESC --> APP["bullet_app: validate and copy pixels<br/>RGB to BGR; detect red target"]
+    DESC --> BAG["Recorder: independently copy pixels<br/>Write image and telemetry to MCAP"]
+    APP --> BOX["BBox or null + source stamp<br/>Mission consumes result; publish on 5558"]
+    classDef physics fill:#dbeafe,stroke:#2563eb,color:#172554;
+    classDef renderer fill:#e0e7ff,stroke:#4f46e5,color:#312e81;
+    classDef pixels fill:#dcfce7,stroke:#15803d,color:#14532d;
+    classDef consumer fill:#ffedd5,stroke:#c2410c,color:#7c2d12;
+    class P,C,PUB,NEXT physics;
+    class RX,MAIN,SET,GPU,RGB renderer;
+    class SHM,DESC pixels;
+    class APP,BAG,BOX consumer;
+```
+
+The receiver worker only buffers raw messages. Parsing, scene changes, capture
+and image publication happen on the Godot main thread. A `busy` guard keeps
+only one capture/readback in flight; newer pending poses can replace older ones.
+The queues and nonblocking locks favor current data over a growing backlog.
+Camera configuration repeats once per second independently of capture cadence.
+
+### Pose-to-image sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant P as bullet_drone
+    participant R as Native receiver worker
+    participant G as Godot main thread
+    participant GPU as GPU / viewport
+    participant S as SHM slots
+    participant A as bullet_app
+    participant M as mcap_bagger
+    P->>R: render/drone_1/config on 5555 (periodic)
+    R->>R: Store raw config in protected slot
+    loop Capture due at configured simulation cadence
+        P->>R: render/drone_1/pose on 5555 (position, attitude, source)
+        R->>R: Replace latest raw pose slot
+        G->>G: poll_request(): take slots under lock, parse and validate
+        G->>G: Convert frames; apply pose and camera settings
+        G->>GPU: Render SubViewport once
+        GPU-->>G: frame_post_draw; texture available for RGB8 readback
+        G->>S: Try exclusive slot lock; write pixels and complete header
+        alt All slots busy
+            G->>G: Drop this frame; continue without blocking
+        else Frame committed
+            G-->>A: camera/front/image descriptor on 5556
+            G-->>M: Same descriptor on 5556 (independent subscriber)
+            par App image processing
+                A->>S: Try shared lock; check identity and sequence; copy pixels
+                S-->>A: Owned RGB pixel bytes, or skip if unavailable/reused
+                opt Complete frame received
+                    A->>A: RGB to BGR; red segmentation; bbox or null
+                    A->>A: Vision worker stores latest metadata and bbox
+                    A-->>M: Mission thread publishes tracking/front/bbox on 5558
+                end
+            and Recorder image processing
+                M->>S: Try shared lock; validate and copy pixels
+                S-->>M: Owned pixel bytes, or skip
+                opt Complete frame received and episode recording active
+                    M->>M: Queue and write image to MCAP
+                end
+            end
+        end
+    end
+    Note over P,A: Stamped path preserves physics / episode / stream / step / measurement time
+    Note over G,S: capture_ns = source.measurement_us * 1000; SHM binary header stays v1
+```
+
+This is asynchronous publication, not a blocking render request/reply protocol.
+Physics can advance while the selected pose renders. App and recorder read the
+same slots independently; a successful notification submission does not prove
+either consumer received or copied the frame. Invalid/busy/reused frames can
+be skipped before detection or recording.
+
+The **source stamp**, rather than arrival time or matching publication counters,
+associates pose, image and bbox. For full message fields, see
+[image-to-bbox data flow](../los_tracking/docs/image-to-bbox-data-flow.md).
+
 ## Build
 
 Prerequisites on Ubuntu 24.04: Godot 4.7, GCC with C++20, CMake, Ninja, pkg-config,
@@ -37,7 +141,9 @@ cmake --build --preset debug
 Unchanged configure/build runs reuse the existing bindings and extension; real
 source, profile or build-setting changes still trigger the required rebuild.
 
-The output is `godot/bin/libzmq_camera.so`, linked to system libzmq. CMake imports
+The output is `godot/bin/libzmq_camera.so`, linked to system libzmq and the shared
+C++ runtime. Sharing that runtime avoids initialization collisions with Mesa/LLVM
+on Intel graphics. CMake imports
 the extension into Godot; a one-second frame delay avoids Godot's cold-import
 shutdown race (upstream issue #111048). Generated files remain ignored.
 
@@ -64,7 +170,7 @@ uv run --locked --all-packages --all-extras --all-groups mcap-bagger --config ..
 
 ```bash
 # bullet_render; NVIDIA PRIME offload verified on the RTX 5070 Laptop GPU
-__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia godot --path godot
+./tools/run_godot.sh --path godot
 ```
 
 ```bash
@@ -73,15 +179,12 @@ uv run --locked --all-packages --all-extras --all-groups python -m examples.exte
   --render-config ../bullet_render/configs/physics.json
 ```
 
-For PlotJuggler, run the workspace `Bullet: Plotter (live position)` task and connect
-its ZMQ Subscriber to TCP transport, address `127.0.0.1`, port `5555`, topic
-`render/drone_1/pose`, using JSON and `simulation_time_s` as the embedded timestamp. The workspace
-`Bullet: Run all` task opens renderer, physics, MCAP recorder, plotter and camera/bbox app in dedicated terminals;
-the renderer uses NVIDIA PRIME. MCAP recording is automatic; PlotJuggler needs its connection. `Bullet: Open tools` lets
-you prepare them before starting `Bullet: Position flight`.
+Use workspace task **Bullet: Run all** to build the native renderer and launch
+`bullet_app`, Godot, external-RC `bullet_drone` physics and the episode recorder in one terminal.
+Recording is enabled automatically, with process logs under `recordings/launch_<UTC>/`. Wait for `Mission READY`, then press Start in Godot. Exiting any
+service stops the remaining services. PlotJuggler and the standalone video viewer
+are not launched by this task.
 
-Use workspace task **Bullet: Physics + render + app** to start app-owned takeoff/LOS physics,
-Godot renderer, automatic MCAP recorder and camera/bbox app together in dedicated terminals.
 
 ## Simulation toolbar
 
@@ -96,6 +199,50 @@ requires fresh app readiness before Start. The toolbar shows actual physics stat
 an optimistic click result. It remains disabled until physics sees this Godot
 controller's heartbeat. A missed command may require another click. Three seconds
 without Godot's 500 ms heartbeat ends an active run; reconnecting never auto-starts.
+
+### Lifecycle and app-control sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User
+    participant G as Godot toolbar / native adapter
+    participant P as External-RC physics
+    participant A as bullet_app
+    participant M as MCAP service
+    G-->>P: simulation/heartbeat on 5557 (every 500 ms)
+    P-->>G: simulation/state on 5555 acknowledges controller
+    P-->>A: Platform config + stopped sensor feedback on 5555
+    A-->>P: Fresh inactive, disarmed readiness frames on 5559
+    U->>G: Start
+    G-->>P: simulation/command on 5557
+    P->>P: Check readiness reset into fresh episode bind app lease
+    P-->>G: Authoritative running state on 5555
+    P-->>M: Running state opens an episode recording
+    P-->>A: New-episode sensor feedback and owner
+    A-->>P: Active RC: warmup, arm, climb, hover, search/center, LOS
+    loop Running episode
+        P->>P: Check RC validity before every step
+        P-->>G: Capture poses / state on 5555
+        P-->>A: Applied RC acknowledgement + sensor feedback on 5555
+        A-->>P: Updated expiring RC on 5559
+    end
+    alt User Stop
+        U->>G: Stop
+        G-->>P: simulation/command stop on 5557
+    else App command expires
+        P->>P: RC watchdog ends episode
+    end
+    P->>P: Freeze physics state and simulation time
+    P-->>G: Stopped state with reason on 5555
+    P-->>A: Stopped feedback on 5555
+    P-->>M: Stopped state drains and closes recording
+    Note over G,P: Reset and the next accepted Start create a fresh episode
+```
+
+The toolbar reflects acknowledged physics state. It does not start physics by
+moving a scene node. Truck collision has its own confirmed termination path
+(described below); a rendered overlap is a proposal until physics confirms it.
 
 The held pose is republished once per second while stopped, including for late
 viewers. Physics steps and simulation time remain frozen. Errors end the episode
@@ -122,7 +269,10 @@ subscribers connect and automatically reconnect. No broker is needed.
 | Physics | Same port 5555 | `render/drone_1/pose`, JSON at 30 Hz simulation time | Godot, MCAP, PlotJuggler |
 | Godot | `tcp://127.0.0.1:5557` | `simulation/command` and `simulation/heartbeat`, JSON | Physics, future consumers |
 | Physics | Same port 5555 | `simulation/state`, JSON | Godot, future consumers |
-| Godot | `tcp://127.0.0.1:5556` | `camera/front/image`, SHM descriptor | MCAP, video viewer |
+| Godot | `tcp://127.0.0.1:5556` | `camera/front/image`, SHM descriptor | bullet_app, MCAP, video viewer |
+| Physics | Same port 5555 | `flight/drone_1/config`, `flight/drone_1/feedback`, JSON | bullet_app, MCAP |
+| App | `tcp://127.0.0.1:5559` | `flight/drone_1/rc`, expiring 18-channel RC JSON | External-RC physics, MCAP |
+| App | `tcp://127.0.0.1:5558` | `tracking/front/bbox`, `app/drone_1/mission`, `tracking/front/los`, JSON | MCAP, plotting/viewing consumers |
 
 Physics runs at 240 Hz. Its configured capture/pose rate remains 30 Hz; physics
 owns camera settings and cadence. Config/pose telemetry retains exactly two parts,
@@ -132,14 +282,18 @@ The old IPC/socket-pixel wire format is replaced and all components must migrate
 together. Configurable TCP ports are supported; all image consumers must share
 the renderer's Linux host/user.
 
-Pose messages now use **schema version 2** and include
-`linear_velocity_m_s: [vx, vy, vz]`: Bullet world-frame ground-truth velocity in
-m/s, Z upward, from the same physics snapshot as position. PlotJuggler can plot
-`linear_velocity_m_s[0]`, `[1]`, and `[2]`; MCAP records the vector with the pose.
-Rebuild/restart the native renderer and restart physics/recorder together after
-updating the shared schema. Strict consumers reject old pose v1 or missing
-velocity. Existing MCAP files retain their original embedded schemas. Config,
-control, image versions and TCP endpoints are unchanged.
+App-owned physics publishes **pose v3** with a `source` observation stamp;
+legacy examples retain **pose v2** without that stamp. Both include
+`linear_velocity_m_s: [vx, vy, vz]` in Bullet world coordinates (m/s, Z up), from
+the same snapshot as position and attitude. Stamped poses produce **image
+descriptor v2** and stamped bbox v2; legacy image descriptors remain v1. The
+**binary SHM header stays v1** in both cases. Strict consumers reject pose v1
+or missing velocity; old MCAP files retain their original embedded schemas.
+
+For the stamped flow, `source` is preserved from pose through image descriptor
+to bbox, and `capture_ns = source.measurement_us * 1000`. That time identifies
+the physics observation used for rendering, not GPU completion or Unix arrival.
+Pose and image publication sequences are independent counters.
 
 Godot allocates three 0600 POSIX SHM slots after learning camera dimensions.
 Writers take nonblocking exclusive locks; readers take nonblocking shared locks
@@ -153,7 +307,8 @@ for the header layout, validation rules and cleanup instructions.
 `publish_frame(pixels, request)`, `get_stats()` and idempotent `close()`.
 `publish_control(action)` only enqueues a local event; `get_control_state()` returns
 the latest valid physics state or an empty dictionary after three seconds without
-a valid state. Socket ownership remains on the native worker.
+a valid state. Lifecycle publication stays on the native worker; image publication runs on
+the main thread.
 Statistics add `shm_session`, `busy_slots` and `publication_drops`; `frames` counts
 accepted notification submissions, not consumer deliveries. Worker threads never
 access Godot objects. Camera dimensions remain fixed for a renderer run.
@@ -163,7 +318,8 @@ and nonblocking publication remain in place. The recorder uses `input: shm_image
 copies pixels into its bounded 64 MiB queue, and reports skipped SHM images.
 Malformed data and queue overflow fail recording rather than hiding accepted-data
 loss. ZMQ can also drop notifications before receipt, which counters cannot fully
-observe. Arrival-time MCAP does not provide exact image/pose association.
+observe. The recorder now preserves an exact image identity sidecar, `camera/front/image/metadata`, linked by image log time and record sequence. Use the
+stamped source identity when available.
 
 Start the camera/bbox preview (or use workspace **Bullet: App (debug)**):
 
@@ -182,8 +338,7 @@ GPU readback; scenery remains visual with no Bullet collision geometry.
 ```bash
 uv run --locked --all-packages --all-extras --all-groups pytest -q
 godot --headless --path godot --script test_frames.gd
-__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
-  godot --path godot --script test_scene.gd
+./tools/run_godot.sh --path godot --script test_scene.gd
 __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
   uv run --locked --all-packages --all-extras --all-groups \
   python tools/check_pipeline.py --seconds 60 --report-dir /tmp/bullet-zmq-check
@@ -215,20 +370,19 @@ Simulation-control validation and limits are recorded in
 
 The sibling `bullet_app` receives camera images, calls `los_tracking`, and publishes
 `tracking/front/bbox` JSON on loopback port 5558. The recorder profile records it
-with `bullet_msgs:bbox.json` during each episode. **Bullet: Physics + render + app**
-and **Bullet: Run all** launch the application in debug mode with bounding boxes.
+with `bullet_msgs:bbox.json` during each episode. **Bullet: Run all** launches
+the application in debug mode with bounding boxes.
 Run `uv sync --locked --all-packages --all-extras --all-groups` in `../bullet_app` before using these tasks; see the
 [application README](../bullet_app/README.md) for the standalone command.
 
 ## App flight verification
 
-The combined tasks launch the app with `--mission-config
+The workspace task launches the app with `--mission-config
 ../los_tracking/examples/bullet_profile.json`. Wait for app READY, then press
 Godot Start: warmup, arm, climb 20 m relative to the initial barometer, settle
 for 3 s and wait for a fresh post-hover bbox before LOS. Missing bbox starts a
 15 deg/s yaw search for one measured full circle; expired RC or LOS faults freeze
-physics. Renderer-confirmed truck contact completes the scenario; landing is not inferred. See [app mission details](../bullet_app/README.md). The separate
-Position flight task still runs the square.
+physics. Renderer-confirmed truck contact completes the scenario; landing is not inferred. See [app mission details](../bullet_app/README.md).
 
 With a real graphics display, run the isolated-port check:
 
@@ -379,3 +533,119 @@ existing panel and Apply acknowledgement. The first case verifies search, horizo
 settling, centered-heading LOS acquisition/approach and the app-loss watchdog; the
 second hides the rendered truck and verifies full-circle exhaustion/freeze.
 Reports, screenshots and logs are retained in the specified report directory.
+
+### Camera latency checks
+
+Godot selects the latest pending pose when idle, applies the camera transform
+immediately and renders with `RenderingServer.force_draw(false)`. Camera
+readback and SHM publication complete before the normal window presentation,
+so a delayed swap cannot hold an already selected camera pose. Physics still schedules poses at
+30 Hz; SHM has no separate timer and never waits for readers.
+
+Every five seconds, `Native camera stats` reports windowed mean, p95 and maximum
+for `render_wait_ms`, `readback_ms`, `capture_ms`, `publish_ms` and `source_age_ms`.
+Source age uses the original physics measurement clock, including time before
+Godot received the pose. Stopped physics intentionally produces old source ages;
+compare these statistics during a running episode. `busy_slots` and
+`publication_drops` identify nonblocking image drops.
+
+The app reserves 20 ms of remaining image validity for its next 100 Hz command
+tick and transport. Navigation enters recovery (`image_deadline`) before an
+image-limited command expires between ticks. The 100 ms image freshness limit,
+command expiry enforcement and process-loss watchdog remain in effect.
+
+Run timing summary checks with
+`godot --headless --path godot --script test_camera_timing.gd`. The real-display
+`tools/check_app_flight.py` check exercises acquisition, image-gap recovery,
+reacquisition and the process-loss watchdog.
+
+### NVIDIA PRIME display path
+
+Use `./tools/run_godot.sh --path godot` or **Bullet: Run all**. The launcher
+selects NVIDIA PRIME with the NVIDIA GLX driver on X11 and disables application
+vsync. The production scene rejects an Intel/software renderer instead of silently
+running on it. Real-display test tools use the same launcher; headless checks
+and capture-only visual fixtures remain available separately.
+
+`prime-select query` distinguishes system profiles. `on-demand` keeps the desktop
+on Intel and offloads Godot to NVIDIA, so presentation still crosses GPUs.
+To use the NVIDIA system profile, run `sudo prime-select nvidia`, then log out
+and back in (or reboot). Verify the new session with `prime-select query`,
+`xrandr --listproviders`, Godot's GPU startup line and `nvidia-smi`. The hardware's
+physical display wiring can still require an Intel output sink. Re-run the camera
+timing/flight checks after changing the session; launch flags cannot certify that
+system-level presentation latency is fixed.
+
+## Live wind and windsock
+
+In the external-RC/LOS workflow, **Wind** beside **Scenario** toggles a separate
+settings panel. Opening it does not send a command. Edit enabled state, world XYZ
+mean velocity in m/s (+Z up), correlated gust XYZ standard deviation in m/s,
+positive correlation time in seconds and integer seed, then **Apply wind**.
+The vector points downstream, toward air travel. Standard deviation is statistical
+variation, not a gust limit. Applied mean and current mean-plus-gust air velocity
+come from physics, using existing ports and ownership/retry checks.
+
+Apply works running or stopped; stopped edits do not advance time. Mean/gust/tau
+edits preserve gust history; seed or enable/mode changes restart it. Start/Reset
+and spawn changes keep settings and restart gusts. Physics restart reloads YAML;
+GUI changes are not saved. Other physics examples display unavailable controls.
+
+A procedural 3 m pole and 2 m windsock sits beside the confirmed spawn, +8 m
+world Y, grounded on the visual terrain. It follows the full authoritative wind
+vector, hangs down below 0.1 m/s and turns gray with “Wind unavailable” on stale
+readback. It uses spectator layer 2 with no collision or shadows and is excluded
+from the drone camera. Godot generates neither wind physics nor random gusts.
+
+Checks: `godot --headless --path godot --script test_wind.gd`,
+`./tools/run_godot.sh --path godot --script test_wind_scene.gd` (display required),
+and `uv run --locked --no-sync pytest -q tests/test_native_adapter.py tests/test_live_wind_pipeline.py`.
+
+## Automatic flight analysis recording
+
+**Bullet: Run all** builds the renderer and runs `tools/run_flight.py` in the
+shared uv environment. It starts the recorder before flight services, creates
+one MCAP for each running episode and stores separate `app.log`, `physics.log`,
+`godot.log` and `recorder.log` files under `recordings/launch_<UTC>/`. MCAP health
+metadata includes that launch ID. The launcher drains the recorder after stopping
+other services. Existing recordings are never overwritten or automatically deleted.
+Do not launch another recorder separately when using this task.
+
+The normal profile now includes wind, simulation state, actual ground truth
+(100 Hz), available sensor outputs (physics sampling rate), physics/app config
+snapshots (1 Hz), and renderer counters (1 Hz). Images retain original frame/source
+identity in a paired metadata channel. Diagnostic streams use existing endpoints;
+none feed ground truth into the app controller or change clipping behavior.
+
+Generate an offline report without modifying any flight settings:
+
+```bash
+uv run --locked --all-packages --all-extras --all-groups python -m mcap_bagger.report \
+  recordings/<flight>.mcap --output /tmp/flight-analysis --csv
+```
+
+Open `/tmp/flight-analysis/report.html`. It identifies the first recorded
+`clipped_target`, the exact rejected image when available, nearby images, commands,
+wind, sensor errors and ages. `report.json` keeps the analysis window and source
+stamps; optional `telemetry.csv` flattens the same window. Legacy files work but
+report missing identity/diagnostics rather than guessing an exact image match.
+
+### Configure the MCAP directory
+
+**Bullet: Run all** now reads `../bullet_app/configs/app.json`. Its
+`recording.output_dir` controls future MCAP files only, with relative paths based
+on the app configuration file. The supplied configuration uses `../recordings/` in the shared workspace.
+The recorder YAML's output directory remains the standalone-recorder fallback.
+
+From this directory, use a different destination for one launch:
+
+```bash
+uv run --locked --all-packages --all-extras --all-groups python tools/run_flight.py \
+  --mcap-output-dir /data/flights
+```
+
+`--app-config PATH` selects a different app configuration; the CLI directory wins
+over the file and is working-directory-relative. Absolute paths and `~` work.
+The recorder creates/checks the directory before readiness. Any failure aborts
+launch before Godot, physics and app start. Logs remain under
+`recordings/launch_<UTC>/`; filenames, episode recording and shutdown are unchanged.

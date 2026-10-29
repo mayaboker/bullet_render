@@ -6,7 +6,6 @@ import argparse
 from contextlib import ExitStack
 import json
 from math import degrees, isclose
-import os
 from pathlib import Path
 import signal
 import subprocess
@@ -52,6 +51,8 @@ def main():
                 topic['endpoint'] = transport['control_endpoint']
             elif topic['key'] == 'flight/drone_1/rc':
                 topic['endpoint'] = transport['flight_command_endpoint']
+            elif topic['key'] == 'analysis/render/health':
+                topic['endpoint'] = transport['image_endpoint']
             elif 'endpoint' in topic:
                 topic['endpoint'] = app_endpoint
         (temp / 'recorder.yaml').write_text(yaml.safe_dump(recorder))
@@ -59,8 +60,7 @@ def main():
         sequence = 0
         def launch(name, cmd, cwd):
             log = stack.enter_context((args.report_dir / f'{name}.log').open('w'))
-            env = dict(os.environ, __NV_PRIME_RENDER_OFFLOAD='1', __GLX_VENDOR_LIBRARY_NAME='nvidia')
-            p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT)
+            p = subprocess.Popen(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT)
             processes.append(p)
             return p
         def snapshot():
@@ -108,7 +108,7 @@ def main():
             app = launch('app', [str(BIN / 'bullet-app'), '--transport-config', str(temp / 'transport.json'),
                                 '--bbox-endpoint', app_endpoint, '--mission-config', str(ROOT.parent / 'los_tracking/examples/bullet_profile.json')], ROOT.parent / 'bullet_app')
             # Probe supports a transport override after the command/state paths.
-            launch('godot', ['godot', '--path', str(ROOT / 'godot'), '--script', 'control_probe.gd', '--',
+            launch('godot', [str(ROOT / 'tools/run_godot.sh'), '--path', str(ROOT / 'godot'), '--script', 'control_probe.gd', '--',
                              str(command_path), str(state_path), str(temp / 'transport.json')], ROOT)
             wait(lambda: latest.get(MISSION_TOPIC, {}).get('phase') == 'READY' and snapshot().get('state', {}).get('state') == 'stopped' and not snapshot().get('disabled', {}).get('start', True), 'ready')
             if args.yaw_search:
@@ -168,7 +168,12 @@ def main():
             while time.monotonic() < until:
                 pump()
                 assert latest[MISSION_TOPIC]['phase'] != 'FAULT', latest[MISSION_TOPIC]
+                assert latest[FEEDBACK_TOPIC]['state'] == 'running', latest[FEEDBACK_TOPIC]
                 time.sleep(.01)
+            # A short image gap may hold in recovery, then must reacquire without stopping physics.
+            wait(lambda: latest[MISSION_TOPIC]['phase'] == 'LOS_APPROACH'
+                 and latest[MISSION_TOPIC]['diagnostics']['bearing_valid']
+                 and latest[MISSION_TOPIC]['diagnostics']['rate_observable'], 'fresh LOS after image gap', timeout=5)
             diagnostics = latest[MISSION_TOPIC]['diagnostics']
             assert diagnostics['bearing_valid'] and diagnostics['rate_observable'], diagnostics
             assert abs(diagnostics['reference_pitch_rad']) > 0

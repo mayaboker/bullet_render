@@ -427,3 +427,87 @@ def test_native_spawn_contract_topic_filtering_identity_and_expiry(probe, tmp_pa
         native.event(lambda e: e.get('invalid', 0) > 0)
         # Invalid advertisements do not refresh the last valid status's lifetime.
         native.event(lambda e: e.get('spawn_state') == {})
+
+
+def test_source_age_uses_physics_stamp_not_recent_socket_arrival(probe):
+    native = probe()
+    native.settings.put(json.dumps(config()))
+    packet = pose()
+    # A recently received pose can already be older than the flight image budget.
+    packet.update(schema_version=3, source=dict(physics_id='physics', episode_id='first', stream_id='a',
+        step_index=0, simulation_time_s=0.0, measurement_us=time.monotonic_ns() // 1000 - 200_000))
+    native.poses.put(json.dumps(packet))
+    result = native.event(lambda e: e.get('sequence') == 0 and e.get('success'))
+    assert result['stats']['source_age_ms'] >= 200
+    wait_for(lambda: len(native.samples) == 1)
+    assert native.images[0] == bytes([42]) * 12
+
+
+def test_native_does_not_override_cpp_once_runtime():
+    symbols = subprocess.run(['nm', '-D', '--defined-only', str(ROOT / 'godot/bin/libzmq_camera.so')],
+                             capture_output=True, text=True, check=True).stdout
+    # A private static runtime can collide with Mesa/LLVM's dynamically loaded runtime.
+    assert '__once_proxy' not in symbols
+    assert '_ZSt15__once_callable' not in symbols
+
+
+def test_native_wind_contract_readback_and_request(probe):
+    from bullet_msgs.wind import REQUEST_TOPIC, STATE_TOPIC, validate_request
+    from bullet_msgs.control import HEARTBEAT_TOPIC, STATE_TOPIC as CONTROL_STATE
+    native=probe(control_action='wind')
+    with zmq.Context() as context, context.socket(zmq.SUB) as receiver:
+        receiver.setsockopt(zmq.LINGER,0)
+        receiver.setsockopt(zmq.SUBSCRIBE,b'simulation/')
+        receiver.connect(json.loads(Path(native.process.args[native.process.args.index('--')+1]).read_text())['control_endpoint'])
+        assert receiver.poll(5000)
+        topic,payload=receiver.recv_multipart()
+        assert topic==HEARTBEAT_TOPIC
+        owner=json.loads(payload)['controller_id']
+        control=dict(schema_version=1,physics_id='physics',controller_id=owner,episode_id='episode',state='running',reason='test',simulation_time_s=1.)
+        Publisher(native.settings.socket,CONTROL_STATE.decode()).put(json.dumps(control))
+        native.event(lambda e:e.get('control_state',{}).get('state')=='running')
+        packet=dict(schema_version=1,physics_id='physics',controller_id=owner,episode_id='episode',request_id=None,
+                    settings=dict(enabled=True,behavior='gusts',velocity_world_m_s=[2.,0.,0.],gust_stddev_m_s=[.3,.3,.1],correlation_time_s=1.,seed=2),
+                    velocity_world_m_s=[2.1,.1,0.],simulation_time_s=1.,result='idle',reason='startup')
+        Publisher(native.settings.socket,STATE_TOPIC.decode()+'/suffix').put(json.dumps(packet))
+        Publisher(native.settings.socket,STATE_TOPIC.decode()).put(json.dumps(dict(packet,episode_id='other')))
+        time.sleep(.1)
+        while receiver.poll(0):
+            assert receiver.recv_multipart()[0]!=REQUEST_TOPIC
+        Publisher(native.settings.socket,STATE_TOPIC.decode()).put(json.dumps(packet))
+        assert native.event(lambda e:e.get('wind_state',{}).get('episode_id')=='episode')['wind_state']==packet
+        deadline=time.monotonic()+5
+        request=None
+        while request is None and time.monotonic()<deadline:
+            assert receiver.poll(5000)
+            topic,payload=receiver.recv_multipart()
+            if topic==REQUEST_TOPIC:
+                request=validate_request(json.loads(payload))
+        assert request is not None and request['controller_id']==owner
+        assert request['settings']==packet['settings'] and request['request_id']=='native-wind'
+        Publisher(native.settings.socket,STATE_TOPIC.decode()).put(json.dumps(dict(packet,settings=dict(packet['settings'],correlation_time_s=0))))
+        native.event(lambda e:e.get('invalid',0)>0)
+        native.event(lambda e:e.get('wind_state')=={})
+
+
+def test_renderer_health_uses_existing_image_endpoint(probe):
+    from bullet_msgs import schema_bytes
+    from bullet_msgs.control import STATE_TOPIC
+    from jsonschema import validate
+    native=probe()
+    owner=native.event(lambda e:'controller_id' in e)['controller_id']
+    profile=json.loads(Path(native.process.args[native.process.args.index('--')+1]).read_text())
+    with zmq.Context() as context, context.socket(zmq.SUB) as observer:
+        observer.setsockopt(zmq.LINGER,0)
+        observer.setsockopt(zmq.SUBSCRIBE,b'analysis/render/health')
+        observer.connect(profile['image_endpoint'])
+        time.sleep(.2)
+        packet=dict(schema_version=1,physics_id='physics',episode_id='episode',controller_id=owner,state='running',reason='test',simulation_time_s=0.)
+        Publisher(native.settings.socket,STATE_TOPIC.decode()).put(json.dumps(packet))
+        assert observer.poll(5000)
+        topic,payload=observer.recv_multipart()
+        assert topic==b'analysis/render/health'
+        value=json.loads(payload)
+        validate(value,json.loads(schema_bytes('render_health.json')))
+        assert value['physics_id']=='physics' and value['episode_id']=='episode'
+        assert value['stats']['publication_drops']==0

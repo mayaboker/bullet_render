@@ -1,6 +1,6 @@
 # Filename prefix; letters, digits, underscores or hyphens.
 project: bullet_landscape
-# Output directory relative to this YAML; created on start.
+# Standalone recorder fallback, relative to this YAML; the standard launcher overrides it from bullet_app/configs/app.json.
 output_dir: ../recordings
 # ZeroMQ transport profile relative to this YAML; loopback TCP telemetry and SHM descriptors.
 transport_config: transport.json
@@ -109,4 +109,64 @@ topics:
     # Physics/episode identity, named spawn, v2 takeoff climb in metres and acknowledgement.
     schema: bullet_msgs:spawn_state.json
     # Unix arrival time; the spawn is configuration rather than a sensor sample.
+    timestamp_source: receive
+  # Flight analysis: simulation/wind_state, with publisher source stamps retained in payload.
+  - key: simulation/wind_state
+    # Two-part JSON; no new transport ports.
+    input: json
+    # Shared versioned contract embedded in every MCAP.
+    schema: bullet_msgs:wind_state.json
+    # Unix arrival clock; simulation/monotonic clocks stay in payload.
+    timestamp_source: receive
+  # Flight analysis: simulation/state, with publisher source stamps retained in payload.
+  - key: simulation/state
+    # Two-part JSON; no new transport ports.
+    input: json
+    # Shared versioned contract embedded in every MCAP.
+    schema: bullet_msgs:state.json
+    # Unix arrival clock; simulation/monotonic clocks stay in payload.
+    timestamp_source: receive
+  # Flight analysis: analysis/physics/ground_truth, with publisher source stamps retained in payload.
+  - key: analysis/physics/ground_truth
+    # Two-part JSON; no new transport ports.
+    input: json
+    # Shared versioned contract embedded in every MCAP.
+    schema: bullet_msgs:analysis_ground_truth.json
+    # Unix arrival clock; simulation/monotonic clocks stay in payload.
+    timestamp_source: receive
+  # Flight analysis: analysis/physics/sensors, with publisher source stamps retained in payload.
+  - key: analysis/physics/sensors
+    # Two-part JSON; no new transport ports.
+    input: json
+    # Shared versioned contract embedded in every MCAP.
+    schema: bullet_msgs:analysis_sensors.json
+    # Unix arrival clock; simulation/monotonic clocks stay in payload.
+    timestamp_source: receive
+  # Flight analysis: analysis/physics/config, with publisher source stamps retained in payload.
+  - key: analysis/physics/config
+    # Two-part JSON; no new transport ports.
+    input: json
+    # Shared versioned contract embedded in every MCAP.
+    schema: bullet_msgs:analysis_config.json
+    # Unix arrival clock; simulation/monotonic clocks stay in payload.
+    timestamp_source: receive
+  # Flight analysis: analysis/app/config, with publisher source stamps retained in payload.
+  - key: analysis/app/config
+    # Two-part JSON; no new transport ports.
+    input: json
+    # Existing application telemetry endpoint.
+    endpoint: tcp://127.0.0.1:5558
+    # Shared versioned contract embedded in every MCAP.
+    schema: bullet_msgs:analysis_config.json
+    # Unix arrival clock; simulation/monotonic clocks stay in payload.
+    timestamp_source: receive
+  # Renderer counters and capture age, sampled at 1 Hz on the image publisher.
+  - key: analysis/render/health
+    # JSON uses a separate exact subscription from SHM image descriptors.
+    input: json
+    # Existing Godot image endpoint; this exact health topic is allowed here.
+    endpoint: tcp://127.0.0.1:5556
+    # Shared renderer health schema; all counters are cumulative per process.
+    schema: bullet_msgs:render_health.json
+    # Unix arrival clock, with monotonic generated_us inside the payload.
     timestamp_source: receive
