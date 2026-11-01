@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="560" viewBox="0 0 1040 560" role="img" aria-labelledby="title desc">
+<title id="title">Bullet Render camera pipeline</title>
+<desc id="desc">Physics sends stamped poses on port 5555. Godot renders RGB pixels into shared memory and publishes descriptors on port 5556. The app copies pixels and detects a bbox; the recorder copies images independently.</desc>
+<defs>
+<marker id="metadata" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10Z" fill="#2563eb"/></marker>
+<marker id="pixels" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10Z" fill="#15803d"/></marker>
+</defs>
+<rect width="1040" height="560" rx="16" fill="#f8fafc"/>
+<g font-family="Arial, Helvetica, sans-serif" fill="#0f172a">
+<text x="30" y="40" font-size="25" font-weight="700">Camera data: pose → rendered pixels → bbox</text>
+<text x="30" y="68" font-size="15" fill="#475569">Blue: small ZMQ messages. Green: RGB pixels through shared memory.</text>
+<rect x="30" y="105" width="250" height="165" rx="12" fill="#dbeafe" stroke="#2563eb"/>
+<text x="50" y="136" font-size="20" font-weight="700">bullet_drone</text>
+<text x="50" y="164" font-size="15"><tspan x="50">Physics: 240 Hz</tspan><tspan x="50" dy="26">Capture pose: 30 Hz</tspan><tspan x="50" dy="26">Position + XYZW attitude</tspan><tspan x="50" dy="26">Source step + measurement time</tspan></text>
+<rect x="390" y="105" width="260" height="165" rx="12" fill="#e0e7ff" stroke="#4f46e5"/>
+<text x="410" y="136" font-size="20" font-weight="700">bullet_render / Godot</text>
+<text x="410" y="164" font-size="15"><tspan x="410">Native receiver buffers raw data</tspan><tspan x="410" dy="26">Main thread validates pose</tspan><tspan x="410" dy="26">Set camera → GPU render</tspan><tspan x="410" dy="26">Read back RGB8 pixels</tspan></text>
+<rect x="760" y="105" width="250" height="165" rx="12" fill="#dbeafe" stroke="#2563eb"/>
+<text x="780" y="136" font-size="20" font-weight="700">bullet_app</text>
+<text x="780" y="164" font-size="15"><tspan x="780">Read image descriptor</tspan><tspan x="780" dy="26">Validate + copy SHM pixels</tspan><tspan x="780" dy="26">RGB → BGR → red detector</tspan><tspan x="780" dy="26">BBox + original source identity</tspan></text>
+<g fill="none" stroke="#2563eb" stroke-width="3" marker-end="url(#metadata)"><path d="M280 180 H386"/><path d="M650 180 H756"/></g>
+<g font-size="14" text-anchor="middle" fill="#1d4ed8"><text x="335" y="146">5555</text><text x="335" y="166" font-size="13">config / pose</text><text x="705" y="146">5556</text><text x="705" y="166" font-size="13">descriptor</text></g>
+<rect x="390" y="350" width="260" height="128" rx="12" fill="#dcfce7" stroke="#15803d"/>
+<text x="410" y="382" font-size="20" font-weight="700">POSIX shared memory</text>
+<text x="410" y="409" font-size="15"><tspan x="410">3 reusable RGB8 slots</tspan><tspan x="410" dy="25">640 × 480 × 3 bytes per image</tspan><tspan x="410" dy="25">Nonblocking reader/writer locks</tspan></text>
+<path d="M520 270 V346" fill="none" stroke="#15803d" stroke-width="3" marker-end="url(#pixels)"/>
+<text x="535" y="315" font-size="14" fill="#166534">write pixels</text>
+<rect x="760" y="350" width="250" height="128" rx="12" fill="#ffedd5" stroke="#c2410c"/>
+<text x="780" y="382" font-size="20" font-weight="700">mcap_bagger</text>
+<text x="780" y="409" font-size="15"><tspan x="780">Receive descriptor + bbox</tspan><tspan x="780" dy="25">Copy pixels independently</tspan><tspan x="780" dy="25">Record image + telemetry</tspan></text>
+<path d="M885 270 V346" fill="none" stroke="#2563eb" stroke-width="3" marker-end="url(#metadata)"/>
+<text x="900" y="305" font-size="14" fill="#1d4ed8">5558</text><text x="900" y="325" font-size="13" fill="#1d4ed8">bbox</text>
+<path d="M650 205 H675 V365 H756" fill="none" stroke="#2563eb" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#metadata)"/>
+<path d="M650 390 H730 V252 H756" fill="none" stroke="#15803d" stroke-width="3" marker-end="url(#pixels)"/>
+<text x="658" y="414" font-size="13" fill="#166534">read + copy</text>
+<path d="M650 447 H756" fill="none" stroke="#15803d" stroke-width="3" marker-end="url(#pixels)"/>
+<text x="30" y="515" font-size="15" font-weight="700">The source stamp follows pose → image descriptor → bbox.</text>
+<text x="30" y="541" font-size="14" fill="#475569">Camera path shown. Rendering does not step physics; slow consumers can skip frames rather than block producers.</text>
+</g>
+</svg>

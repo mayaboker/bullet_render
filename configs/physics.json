@@ -1,0 +1,9 @@
+{
+  "transport_config": "transport.json",
+  "camera": {
+    "width_px": 640,
+    "height_px": 480,
+    "fov_x_deg": 90
+  },
+  "fps": 30
+}

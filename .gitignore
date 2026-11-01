@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+.pytest_cache/
+godot/.godot/
+recordings/
+*.mcap
+*.partial
+build/
+godot/bin/
+
+# Generated development and recording artifacts.
+*.py[cod]
+*.egg-info/
+dist/
+*.mcap.partial
+*.mcap.flightlens.sqlite
+*.mcap.flightlens.sqlite-*

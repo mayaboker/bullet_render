@@ -1,0 +1,199 @@
+# Filename prefix; letters, digits, underscores or hyphens.
+project: bullet_landscape
+# Standalone recorder fallback, relative to this YAML; the standard launcher overrides it from bullet_app/configs/app.json.
+output_dir: ../recordings
+# ZeroMQ transport profile relative to this YAML; loopback TCP telemetry and SHM descriptors.
+transport_config: transport.json
+# Exact topic list; no wildcard subscriptions.
+topics:
+  # Raw image publication key.
+  - key: camera/front/image
+    # SHM descriptor input; recorder copies pixels and adds Foxglove RawImage wrapper.
+    input: shm_image
+    # Fixed width in pixels; must match physics startup configuration.
+    width: 640
+    # Fixed height in pixels; must match physics startup configuration.
+    height: 480
+    # Three unsigned bytes per pixel in red/green/blue order.
+    encoding: rgb8
+    # Bytes per row, with no padding: width * 3.
+    step: 1920
+    # Logical camera identity stored in MCAP.
+    frame_id: front_camera
+  # Physics source pose key, published once per scheduled capture.
+  - key: render/drone_1/pose
+    # JSON object validated against the schema below.
+    input: json
+    # Shared schema packaged by the sibling bullet_msgs project.
+    schema: bullet_msgs:pose.json
+    # Use recorder Unix arrival time; simulation time remains inside payload.
+    timestamp_source: receive
+  # Red-target result for each image processed by bullet_app.
+  - key: tracking/front/bbox
+    # Two-part topic/JSON publication, independent of physics telemetry.
+    input: json
+    # bullet_app binds this loopback endpoint; default port is 5558.
+    endpoint: tcp://127.0.0.1:5558
+    # Pixel x/y/width/height or null, with source image identity.
+    schema: bullet_msgs:bbox.json
+    # Recorder Unix arrival time; capture_ns remains source monotonic time.
+    timestamp_source: receive
+  # Requested RC intent, including lease identity and monotonic expiry.
+  - key: flight/drone_1/rc
+    # Strict shared JSON contract, no pixel data.
+    input: json
+    # App flight publisher; distinct from bbox/status port.
+    endpoint: tcp://127.0.0.1:5559
+    # All 18 PWM channels, active flag and 100 ms maximum validity.
+    schema: bullet_msgs:flight_rc.json
+    # Unix arrival time for MCAP; issued_us is local monotonic time.
+    timestamp_source: receive
+  # Applied command acknowledgement and sensor feedback, without XY truth.
+  - key: flight/drone_1/feedback
+    # Two-part topic/JSON on the default telemetry endpoint.
+    input: json
+    # Source, barometer, ideal attitude; v2 adds applied takeoff climb in metres.
+    schema: bullet_msgs:flight_feedback.json
+    # Unix arrival time; source.measurement_us preserves sensor measurement time.
+    timestamp_source: receive
+  # Platform startup advertisement, repeated once per second.
+  - key: flight/drone_1/config
+    # Two-part topic/JSON on the default telemetry endpoint.
+    input: json
+    # Mass, thrust authority, mappings, camera and timing compatibility.
+    schema: bullet_msgs:flight_config.json
+    # Unix arrival time; this packet has no sensor measurement.
+    timestamp_source: receive
+  # App phase, failure reason and LOS bearing/rate/TTC diagnostics.
+  - key: app/drone_1/mission
+    # Two-part JSON publication independent of physics telemetry.
+    input: json
+    # Shares the app bbox publisher; permits one recorder to use multiple ports.
+    endpoint: tcp://127.0.0.1:5558
+    # Mission phase, countdowns and LOS diagnostics.
+    schema: bullet_msgs:mission.json
+    # Unix arrival time; simulation_time_s is the mission clock.
+    timestamp_source: receive
+  # Raw renderer proposal; a collision becomes final only after physics confirms it.
+  - key: render/drone_1/collision
+    # Two-part topic and JSON report.
+    input: json
+    # Shares Godot's lifecycle publisher; no new port.
+    endpoint: tcp://127.0.0.1:5557
+    # Current controller, stamped source, target and detected drone position in metres.
+    schema: bullet_msgs:collision.json
+    # Unix arrival timestamp; source.measurement_us remains monotonic time.
+    timestamp_source: receive
+  # Confirmed, repeated and deduplicated terminal result on physics telemetry.
+  - key: scenario/ended
+    # JSON result is also embedded in simulation state v2 for late subscribers.
+    input: json
+    # Success/target_hit, original collision and final frozen source.
+    schema: bullet_msgs:scenario_end.json
+    # Unix arrival timestamp; ended_us is the host monotonic confirmation time.
+    timestamp_source: receive
+  # Focused LOS telemetry: bearings in degrees, rates in degrees/s, TTC in seconds.
+  - key: tracking/front/los
+    # Strict versioned JSON; invalid or inactive estimates are null with validity flags.
+    input: json
+    # Shares the existing bullet_app bbox/mission publisher; no additional port.
+    endpoint: tcp://127.0.0.1:5558
+    # Includes TTC fit quality/reason, state, source stamps and navigation sequence.
+    schema: bullet_msgs:los_telemetry.json
+    # Unix MCAP arrival time; generated_us is monotonic and source carries simulation time.
+    timestamp_source: receive
+  # Applied initial position and latest Apply outcome, repeated at 10 Hz even stopped.
+  - key: simulation/spawn_state
+    # JSON on the default physics telemetry endpoint (5555).
+    input: json
+    # Physics/episode identity, named spawn, v2 takeoff climb in metres and acknowledgement.
+    schema: bullet_msgs:spawn_state.json
+    # Unix arrival time; the spawn is configuration rather than a sensor sample.
+    timestamp_source: receive
+  # Flight analysis: simulation/wind_state, with publisher source stamps retained in payload.
+  - key: simulation/wind_state
+    # Two-part JSON; no new transport ports.
+    input: json
+    # Shared versioned contract embedded in every MCAP.
+    schema: bullet_msgs:wind_state.json
+    # Unix arrival clock; simulation/monotonic clocks stay in payload.
+    timestamp_source: receive
+  # Flight analysis: simulation/state, with publisher source stamps retained in payload.
+  - key: simulation/state
+    # Two-part JSON; no new transport ports.
+    input: json
+    # Shared versioned contract embedded in every MCAP.
+    schema: bullet_msgs:state.json
+    # Unix arrival clock; simulation/monotonic clocks stay in payload.
+    timestamp_source: receive
+  # Flight analysis: analysis/physics/ground_truth, with publisher source stamps retained in payload.
+  - key: analysis/physics/ground_truth
+    # Two-part JSON; no new transport ports.
+    input: json
+    # Shared versioned contract embedded in every MCAP.
+    schema: bullet_msgs:analysis_ground_truth.json
+    # Unix arrival clock; simulation/monotonic clocks stay in payload.
+    timestamp_source: receive
+  # Flight analysis: analysis/physics/sensors, with publisher source stamps retained in payload.
+  - key: analysis/physics/sensors
+    # Two-part JSON; no new transport ports.
+    input: json
+    # Shared versioned contract embedded in every MCAP.
+    schema: bullet_msgs:analysis_sensors.json
+    # Unix arrival clock; simulation/monotonic clocks stay in payload.
+    timestamp_source: receive
+  # Flight analysis: analysis/physics/config, with publisher source stamps retained in payload.
+  - key: analysis/physics/config
+    # Two-part JSON; no new transport ports.
+    input: json
+    # Shared versioned contract embedded in every MCAP.
+    schema: bullet_msgs:analysis_config.json
+    # Unix arrival clock; simulation/monotonic clocks stay in payload.
+    timestamp_source: receive
+  # Flight analysis: analysis/app/config, with publisher source stamps retained in payload.
+  - key: analysis/app/config
+    # Two-part JSON; no new transport ports.
+    input: json
+    # Existing application telemetry endpoint.
+    endpoint: tcp://127.0.0.1:5558
+    # Shared versioned contract embedded in every MCAP.
+    schema: bullet_msgs:analysis_config.json
+    # Unix arrival clock; simulation/monotonic clocks stay in payload.
+    timestamp_source: receive
+  # Runtime parameter application/rejection events; includes effective value and revision.
+  - key: analysis/app/parameters
+    # Structured JSON events, separate from diagnostic logs.
+    input: json
+    # Existing application telemetry publisher.
+    endpoint: tcp://127.0.0.1:5558
+    # Shared schema; source is null when no sensor episode exists yet.
+    schema: bullet_msgs:analysis_parameters.json
+    # Unix arrival clock; applied_at_s preserves host-monotonic application time.
+    timestamp_source: receive
+  # Betaflight estimator, status and RC-link health sampled by bullet_app at 20 Hz.
+  - key: analysis/app/msp
+    input: json
+    endpoint: tcp://127.0.0.1:5558
+    schema: bullet_msgs:analysis_msp.json
+    # Values use independent host-receipt times because MSP has no source timestamps.
+    timestamp_source: receive
+  # Every RC frame successfully written to the MSP transport, normally at 50 Hz.
+  - key: analysis/app/msp_rc
+    # JSON event published by the app's mission thread after it drains MSP deliveries.
+    input: json
+    # Existing application telemetry endpoint; no new socket is needed.
+    endpoint: tcp://127.0.0.1:5558
+    # Shared contract for the actual MSP-bound 18-channel PWM frame.
+    schema: bullet_msgs:analysis_msp_rc.json
+    # Unix MCAP arrival time; sent_at_us preserves the host-monotonic write time.
+    timestamp_source: receive
+  # Renderer counters and capture age, sampled at 1 Hz on the image publisher.
+  - key: analysis/render/health
+    # JSON uses a separate exact subscription from SHM image descriptors.
+    input: json
+    # Existing Godot image endpoint; this exact health topic is allowed here.
+    endpoint: tcp://127.0.0.1:5556
+    # Shared renderer health schema; all counters are cumulative per process.
+    schema: bullet_msgs:render_health.json
+    # Unix arrival clock, with monotonic generated_us inside the payload.
+    timestamp_source: receive
