@@ -642,19 +642,24 @@ Dictionary ZmqCameraAdapter::get_control_state() {
     if (!raw.empty()) {
         const auto state = parse(raw);
         Dictionary legacy = state.duplicate();
+        const bool v3 = number(state.get("schema_version", 0), 3, 3, true);
         const bool v2 = number(state.get("schema_version", 0), 2, 2, true);
-        if (v2) legacy.erase("terminal_result");
-        bool valid = raw.size() <= 4096 && (!v2 || state.has("terminal_result")) && shape(legacy, {"schema_version", "physics_id", "controller_id", "episode_id", "state", "reason", "simulation_time_s"});
+        if (v2 || v3) legacy.erase("terminal_result");
+        if (v3) legacy.erase("mission_start_step");
+        bool valid = raw.size() <= 4096 && (!(v2 || v3) || state.has("terminal_result")) &&
+            (!v3 || state.has("mission_start_step")) && shape(legacy, {"schema_version", "physics_id", "controller_id", "episode_id", "state", "reason", "simulation_time_s"});
         if (valid) {
             const String mode = state["state"];
             const String reason = state["reason"];
-            valid = number(state["schema_version"], v2 ? 2 : 1, v2 ? 2 : 1, true) && control_identity(state["physics_id"]) && control_identity(state["episode_id"]) &&
+            valid = number(state["schema_version"], v3 ? 3 : v2 ? 2 : 1, v3 ? 3 : v2 ? 2 : 1, true) && control_identity(state["physics_id"]) && control_identity(state["episode_id"]) &&
                 (state["controller_id"].get_type() == Variant::NIL || control_identity(state["controller_id"])) &&
                 state["state"].get_type() == Variant::STRING && (mode == "running" || mode == "stopped" || mode == "error") &&
                 state["reason"].get_type() == Variant::STRING && reason.length() > 0 && reason.length() <= 256 &&
                 number(state["simulation_time_s"], 0, 1e12);
         }
-        if (valid && v2 && state["terminal_result"].get_type() != Variant::NIL) {
+        if (valid && v3 && state["mission_start_step"].get_type() != Variant::NIL)
+            valid = number(state["mission_start_step"], 0, 9007199254740991.0, true) && String(state["state"]) == "running";
+        if (valid && (v2 || v3) && state["terminal_result"].get_type() != Variant::NIL) {
             valid = state["terminal_result"].get_type() == Variant::DICTIONARY;
             if (valid) {
                 const Dictionary end = state["terminal_result"], final_source = end.get("final_source", Dictionary());

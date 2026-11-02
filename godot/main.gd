@@ -476,13 +476,15 @@ func _physics_process(_delta: float) -> void:
 		pending_collision = {}
 		collision_failed = false
 		collision_detector.reset()
-	if state.state != "running":
+	if state.state != "running" or (state.get("schema_version", 1) == 3 and state.get("mission_start_step") == null):
 		pending_collision = {}
+		collision_detector.reset()
+		adapter.poll_collision_pose()
 		return
 	var now := Time.get_ticks_msec()
 	if pending_collision.is_empty():
 		var pose: Dictionary = adapter.poll_collision_pose()
-		if not pose.is_empty():
+		if _collision_pose_eligible(state, pose):
 			pending_collision = collision_detector.check(pose)
 			if not pending_collision.is_empty():
 				pending_collision.event_id = "%s-%s-hit-%s" % [adapter.get_stats().controller_id, pose.source.episode_id, int(pose.source.step_index)]
@@ -495,6 +497,16 @@ func _physics_process(_delta: float) -> void:
 		else:
 			adapter.publish_collision(pending_collision)
 		collision_retry_ms = now + COLLISION_RETRY_MS
+
+func _collision_pose_eligible(state: Dictionary, pose: Dictionary) -> bool:
+	if pose.is_empty() or state.state != "running":
+		return false
+	if pose.source.physics_id != state.physics_id or pose.source.episode_id != state.episode_id:
+		return false
+	if state.get("schema_version", 1) == 3:
+		var start_step = state.get("mission_start_step")
+		return start_step != null and pose.source.step_index >= start_step
+	return true
 
 func _process(_delta: float) -> void:
 	_update_controls()

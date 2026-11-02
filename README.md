@@ -396,6 +396,14 @@ using the measurement timestamp for capture_ns; binary SHM remains v1.
 
 ## Truck collision and completion
 
+Manual flight separates Godot session Start from application **Start mission**.
+Simulation state v3 carries `mission_start_step`; target collision checks wait
+until that boundary and ignore older or foreign-episode poses. During manual
+idle, the renderer drains collision poses and clears sweep/pending state. Physics
+independently validates post-start source history. Legacy state v1/v2 keeps its
+existing behavior. Terrain remains physically solid, but physics waits for
+0.20 m clearance after mission start before treating terrain contact as a crash.
+
 In app-owned flight, Godot checks a **0.42 m drone sphere** against convex
 colliders derived from individual red-truck meshes. Initial overlap and swept
 queries detect contact even when poses skip past the truck. Collision queries run

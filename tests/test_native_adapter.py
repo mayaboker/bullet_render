@@ -528,3 +528,21 @@ def test_renderer_health_uses_existing_image_endpoint(probe):
         validate(value,json.loads(schema_bytes('render_health.json')))
         assert value['physics_id']=='physics' and value['episode_id']=='episode'
         assert value['stats']['publication_drops']==0
+
+
+def test_native_v3_mission_boundary_roundtrip_and_malformed_rejection(probe):
+    from bullet_msgs.control import STATE_TOPIC
+    native=probe()
+    owner=native.event(lambda e:'controller_id' in e)['controller_id']
+    packet=dict(schema_version=3,physics_id='physics',episode_id='episode',controller_id=owner,
+        state='running',reason='started',simulation_time_s=0.,terminal_result=None,mission_start_step=None)
+    pub=Publisher(native.settings.socket,STATE_TOPIC.decode())
+    pub.put(json.dumps(packet))
+    assert native.event(lambda e:e.get('control_state',{}).get('schema_version')==3)['control_state']==packet
+    packet['mission_start_step']=42
+    pub.put(json.dumps(packet))
+    assert native.event(lambda e:e.get('control_state',{}).get('mission_start_step')==42)['control_state']==packet
+    pub.put(json.dumps(dict(packet,mission_start_step=-1)))
+    native.event(lambda e:e.get('invalid',0)>0)
+    pub.put(json.dumps(dict(packet,state='stopped',mission_start_step=None)))
+    assert native.event(lambda e:e.get('control_state',{}).get('state')=='stopped')['control_state']['mission_start_step'] is None

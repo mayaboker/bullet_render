@@ -25,6 +25,23 @@ func _run() -> void:
 	root.add_child(scene)
 	await physics_frame
 	await physics_frame
+	var sample := pose(Vector3(0, 2.1, -0.95))
+	var state := {"schema_version": 3, "physics_id": "physics", "episode_id": "test",
+		"state": "running", "mission_start_step": null}
+	require(not scene._collision_pose_eligible(state, sample), "collision enabled during manual idle")
+	state.mission_start_step = sample.source.step_index + 1
+	require(not scene._collision_pose_eligible(state, sample), "delayed pre-start pose eligible")
+	sample.source.step_index += 1
+	require(scene._collision_pose_eligible(state, sample), "post-start target collision disabled")
+	sample.source.episode_id = "old"
+	require(not scene._collision_pose_eligible(state, sample), "foreign episode eligible")
+	sample.source.episode_id = "test"
+	state.state = "stopped"
+	require(not scene._collision_pose_eligible(state, sample), "stopped collision eligible")
+	state.state = "running"
+	state.schema_version = 2
+	state.erase("mission_start_step")
+	require(scene._collision_pose_eligible(state, sample), "legacy collision behavior changed")
 	var detector: RefCounted = scene.collision_detector
 	require(not detector.check(pose(Vector3(0, 2.1, -0.95))).is_empty(), "initial overlap missed")
 	require(detector.check(pose(Vector3(0, 2.1, -0.95))).is_empty(), "duplicate collision")
