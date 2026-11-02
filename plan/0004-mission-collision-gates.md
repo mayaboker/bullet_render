@@ -1,7 +1,7 @@
 # Mission start and liftoff collision gates
 
 - Status: Implemented; verified 2026-11-02
-- Implementation commit: Pending
+- Implementation commit: `1b833e75d34abd07cae3834b9afdf5abc24b30f7`
 
 Before Start mission ignore collision termination. Enable target hits at mission
 start and terrain-crash detection only after a post-start sample has at least
@@ -47,4 +47,14 @@ entire Run all stack to load the rebuilt native extension and both new protocol
 writers/readers. No running flight session was restarted; no physical motors were
 actuated. Actual Betaflight/SITL flight was not run; its shared gate and lease
 policy were verified with fake commands. Existing unrelated work was preserved.
-No commits or pushes were made; implementation commit remains Pending.
+No commits or pushes were made; Implementation commit: `1b833e75d34abd07cae3834b9afdf5abc24b30f7`.
+
+## Commit record — 2026-11-02
+
+The verification notes above describe the pre-commit work. Implementation is
+now committed; nothing was pushed. These are implementation hashes, rather than
+the subsequent documentation commits that record them.
+
+| Repository | Implementation commit |
+|---|---|
+| bullet_render | `1b833e75d34abd07cae3834b9afdf5abc24b30f7` |

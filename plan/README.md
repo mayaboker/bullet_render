@@ -6,4 +6,4 @@
 | [0002 Shared terrain heightmap](0002-shared-terrain-heightmap.md) | Export and render the shared terrain asset used by PyBullet collision. | Implemented and verified | `471576d` |
 | [0003 Safe terrain spawn picker](0003-spawn-picker-clearance.md) | Keep picked/default positions above the physics vehicle-clearance margin. | Implemented; Godot spawn test passed | `adf9c73` |
 
-- [0004: Mission collision gates](0004-mission-collision-gates.md) — Implemented; 29 tests passed; commit Pending.
+- [0004: Mission collision gates](0004-mission-collision-gates.md) — Implemented; 29 tests passed; commit `1b833e75d34abd07cae3834b9afdf5abc24b30f7`.
