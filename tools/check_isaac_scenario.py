@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -17,6 +18,8 @@ import yaml
 import zmq
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from isaac.runtime import isaac_directory
 BIN = ROOT.parent / '.venv/bin'
 
 
@@ -103,7 +106,7 @@ def main():
                 *(['--reject-collisions'] if args.reject_collisions else [])], ROOT.parent / 'bullet_drone')
             app = launch('app', [str(BIN / 'bullet-app'), '--transport-config', str(temp / 'transport.json'),
                 '--bbox-endpoint', endpoints[4], '--mission-config', str(ROOT.parent / 'los_tracking/examples/bullet_profile.json'), '--debug'])
-            launch('isaac', ['/home/user/isaacsim5.0/python.sh', str(ROOT / 'tools/isaac_control_probe.py'),
+            launch('isaac', [str(isaac_directory() / 'python.sh'), str(ROOT / 'tools/isaac_control_probe.py'),
                 str(command_path), '--transport-config', str(temp / 'transport.json')])
             wait(lambda: snapshot().get('editable') and latest.get(b'app/drone_1/mission', {}).get('phase') == 'READY', 'initial ready', 180)
             assert snapshot()['marker']

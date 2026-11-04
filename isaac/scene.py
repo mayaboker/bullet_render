@@ -204,10 +204,10 @@ class Scene:
 
     def focus_drone(self):
         import numpy as np
-        from isaacsim.core.utils.viewports import set_camera_view
+        from isaacsim.core.rendering_manager import ViewportManager
         p = np.asarray(self.last_position)
         self.set_view_camera(PERSPECTIVE_CAMERA)
-        set_camera_view(p + np.array([-12., -18., 12.]), p, PERSPECTIVE_CAMERA, viewport_api=main_viewport())
+        ViewportManager.set_camera_view(PERSPECTIVE_CAMERA, eye=p + np.array([-12., -18., 12.]), target=p)
 
 
 class DroneMarker:

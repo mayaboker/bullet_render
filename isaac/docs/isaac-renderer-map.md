@@ -2,7 +2,7 @@
 
 `bullet_render · isaac/`
 
-How the Isaac Sim 5.0 renderer in bullet_render sits between physics and the app.
+How the Isaac Sim 6.2 renderer in bullet_render sits between physics and the app.
 Physics owns dynamics and the RC lease. The renderer only receives poses, draws the
 world and publishes the front-camera image. The app closes the loop with RC commands
 that never pass through the renderer.
@@ -16,10 +16,10 @@ A browser version with the same content is in
 flowchart LR
     Physics["<b>Physics</b><br/><i>bullet_drone external_rc</i><br/>PyBullet at 240 Hz<br/>feedback at 120 Hz<br/>expects RC at 100 Hz<br/>FlightLease deadline<br/>spawn / takeoff settings<br/>stops on truck contact"]
 
-    subgraph Renderer["Isaac renderer process · isaac/main.py under Isaac python.sh (Python 3.11, zero-delay Kit experience)"]
+    subgraph Renderer["Isaac renderer process · isaac/main.py under Isaac python.sh (Python 3.12, zero-delay Kit experience)"]
         direction LR
         Receiver["<b>Receiver worker thread</b><br/><i>transport.py · scenario.py</i><br/>ZeroMQ SUB → latest-only raw slots<br/>bounded command queue (8)<br/>spawn request retries, 4.5 s give-up<br/>ContactSession: sphere sweep<br/>against truck bounds → report, stop<br/>touches no Kit or USD objects"]
-        Main["<b>Main thread, Kit update loop</b><br/><i>main.py · scene.py</i><br/>poll(): decode, JSON-schema validate<br/>Scene.update_pose: drone marker,<br/>red truck boxes, referenced USD world<br/>Camera.set_world_pose (X fwd, Z up)<br/>application.update(): zero-delay render<br/>camera.get_rgba() 640×480<br/>surface_height() for Snap buttons<br/>idle: UI pump at 10 Hz, no PhysX scene"]
+        Main["<b>Main thread, Kit update loop</b><br/><i>main.py · scene.py</i><br/>poll(): decode, JSON-schema validate<br/>Scene.update_pose: drone marker,<br/>red truck boxes, referenced USD world<br/>Camera.set_world_pose (X fwd, Z up)<br/>application.update(): zero-delay render<br/>camera.get_rgba() 640×480<br/>surface_height() for Snap buttons<br/>idle: UI pump at 10 Hz, Bullet owns dynamics"]
         Controls["<b>Controls window (omni.ui)</b><br/><i>controls.py</i><br/>Start / Stop / Reset<br/>Apply spawn XYZ + takeoff height<br/>Apply target XYZ, Snap Z to surface<br/>Perspective / Front camera, Load world"]
         Publisher["<b>Publisher</b><br/><i>transport.py · bullet_msgs.shm</i><br/>SHM FrameWriter RGB8 + descriptor<br/>ZeroMQ PUB bind 5556, SNDHWM 8<br/>capture_ns = physics measurement_us<br/>drops frame if receipt age &gt; 0.1 s"]
     end

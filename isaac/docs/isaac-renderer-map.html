@@ -70,7 +70,7 @@ td:first-child { font-family: var(--font-mono); font-size: 13px; white-space: no
 <header>
   <div class="eyebrow">bullet_render · isaac/</div>
   <h1>Isaac Renderer Map</h1>
-  <p>How the Isaac Sim 5.0 renderer in bullet_render sits between physics and the app. Physics owns dynamics and the RC lease. The renderer only receives poses, draws the world and publishes the front-camera image. The app closes the loop with RC commands that never pass through the renderer.</p>
+  <p>How the Isaac Sim 6.2 renderer in bullet_render sits between physics and the app. Physics owns dynamics and the RC lease. The renderer only receives poses, draws the world and publishes the front-camera image. The app closes the loop with RC commands that never pass through the renderer.</p>
 </header>
 
 <section>
@@ -101,7 +101,7 @@ td:first-child { font-family: var(--font-mono); font-size: 13px; white-space: no
       <!-- Renderer process boundary -->
       <rect class="boundary" x="268" y="40" width="600" height="520" rx="6"/>
       <text class="title" x="280" y="62">Isaac renderer process</text>
-      <text class="small mono" x="280" y="79">isaac/main.py under Isaac python.sh (Python 3.11, zero-delay Kit experience)</text>
+      <text class="small mono" x="280" y="79">isaac/main.py under Isaac python.sh (Python 3.12, zero-delay Kit experience)</text>
 
       <!-- Receiver thread -->
       <rect class="box" x="296" y="100" width="230" height="180" rx="3"/>
@@ -125,7 +125,7 @@ td:first-child { font-family: var(--font-mono); font-size: 13px; white-space: no
       <text x="710" y="245" text-anchor="middle">application.update(): zero-delay render</text>
       <text x="710" y="265" text-anchor="middle">camera.get_rgba() 640×480</text>
       <text x="710" y="285" text-anchor="middle">surface_height() for Snap buttons</text>
-      <text class="small" x="710" y="306" text-anchor="middle">idle: UI pump at 10 Hz, no PhysX scene</text>
+      <text class="small" x="710" y="306" text-anchor="middle">idle: UI pump at 10 Hz, Bullet owns dynamics</text>
 
       <!-- Controls -->
       <rect class="box" x="296" y="400" width="230" height="140" rx="3"/>

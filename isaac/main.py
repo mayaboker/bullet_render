@@ -1,4 +1,4 @@
-"""Isaac Sim 5.0 render-only backend. Launch with Isaac's python.sh."""
+"""Isaac Sim 6.2 render-only backend. Launch with Isaac's python.sh."""
 import argparse
 import os
 from pathlib import Path
@@ -9,10 +9,9 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 IDLE_UI_PERIOD_S = 0.1
 POSE_POLL_PERIOD_S = 0.002
-# Isaac has its own Python 3.11; never import the workspace's 3.12 site-packages.
-sys.path.insert(0, str(ROOT / 'build' / 'isaac-deps'))
-sys.path.insert(0, str(ROOT.parent / 'bullet_msgs' / 'src'))
 sys.path.insert(0, str(ROOT))
+from isaac.runtime import DEPENDENCIES
+sys.path[:0] = [str(DEPENDENCIES), str(ROOT.parent / 'bullet_msgs' / 'src')]
 
 
 def main():
@@ -53,13 +52,17 @@ def main():
     # Isaac's zero-delay experience waits for render/readback completion in the
     # current Kit update. The default experience pipelines older camera frames.
     experience = Path(os.environ['EXP_PATH']) / 'isaacsim.exp.base.zero_delay.kit'
-    application = SimulationApp({'headless': args.headless, 'renderer': 'RayTracedLighting'},
+    # Physics requests one held-pose capture per update, not independently clocked
+    # sensor ticks. Disable independent sensor scheduling for pose-driven rendering.
+    application = SimulationApp({'headless': args.headless, 'renderer': 'RayTracedLighting',
+                                 'extra_args': ['--/rtx/hydra/supportMultiTickRate=false',
+                                                '--/rtx/rendering/perSensorTickTlas=false']},
                                 experience=str(experience))
-    receiver = publisher = controls = None
+    receiver = publisher = controls = camera = None
     try:
         import numpy as np
         import omni.timeline
-        from isaacsim.sensors.camera import Camera
+        from isaac.camera import Camera
         from isaac.scene import Scene, FRONT_CAMERA
         scene = Scene(args.world, args.target)
         receiver = Receiver(profile, target_position=args.target)
@@ -67,7 +70,6 @@ def main():
             from isaac.controls import Controls
             controls = Controls(receiver, scene, args.spawn, args.takeoff_height)
 
-        camera = None
         last_stats = 0.0
         captures = published = 0
         last_ui_update = 0.0
@@ -102,26 +104,20 @@ def main():
             capture_started = time.monotonic()
             if camera is None:
                 settings = receiver.config['camera']
-                camera = Camera(FRONT_CAMERA, resolution=(settings['width_px'], settings['height_px']))
-                camera.initialize()
-                # Physical aperture and focal length use the same units; ratio defines horizontal FOV.
-                # Keep USD focalLength away from the renderer's small-value limits.
-                focal = 1.0
-                camera.set_focal_length(focal)
-                camera.set_horizontal_aperture(2 * focal * np.tan(np.deg2rad(settings['fov_x_deg']) / 2))
-                camera.set_clipping_range(0.01, 900.0)
-                # Sensor annotators need a playing render timeline. This stage has
-                # no PhysicsScene or rigid bodies; PyBullet still owns all dynamics.
+                camera = Camera(FRONT_CAMERA, width=settings['width_px'], height=settings['height_px'],
+                                fov_x_deg=settings['fov_x_deg'])
+                # Sensor annotators need a playing timeline. Kit may create an
+                # empty PhysicsScene, but PyBullet still owns all drone dynamics.
                 omni.timeline.get_timeline_interface().play()
                 publisher = Publisher(profile['image_endpoint'], settings)
             position, orientation = camera_pose(pose)
             scene.update_pose(pose)
             if controls is not None:
                 controls.pose(pose)
-            camera.set_world_pose(np.asarray(position), np.asarray(orientation), camera_axes='world')
+            camera.set_world_pose(position, orientation)
             # SimulationApp gathers render results synchronously (asyncRendering=false).
             # Zero-delay rendering completes the held pose and RGB readback in
-            # this update. This stage has no PhysX scene or World.step.
+            # this update. Drone motion is set from telemetry, without World.step.
             application.update()
             last_ui_update = time.monotonic()
             rgba = camera.get_rgba()
@@ -150,6 +146,9 @@ def main():
             receiver.close()
         if publisher is not None:
             publisher.close()
+        # CameraSensor's destructor detaches annotators and destroys its render
+        # product while Kit's renderer is still available.
+        camera = None
         application.close()
 
 

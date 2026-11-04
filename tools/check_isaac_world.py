@@ -12,7 +12,7 @@ import time
 import traceback
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT), str(ROOT / 'build/isaac-deps'), str(ROOT.parent / 'bullet_msgs/src')]
+sys.path[:0] = [str(ROOT), str(ROOT / 'build/isaac6.2-deps'), str(ROOT.parent / 'bullet_msgs/src')]
 
 
 def main():
@@ -23,12 +23,14 @@ def main():
     args.report_dir.mkdir(parents=True, exist_ok=True)
     before = hashlib.sha256(args.world.read_bytes()).hexdigest()
     from isaacsim import SimulationApp
-    app = SimulationApp({'headless': False, 'renderer': 'RayTracedLighting'},
+    app = SimulationApp({'headless': False, 'renderer': 'RayTracedLighting',
+                         'extra_args': ['--/rtx/hydra/supportMultiTickRate=false',
+                                        '--/rtx/rendering/perSensorTickTlas=false']},
                         experience=os.environ['EXP_PATH'] + '/isaacsim.exp.base.zero_delay.kit')
-    marker = None
+    marker = camera = None
     report = dict(passed=False)
     try:
-        import omni.renderer_capture
+        import omni.kit.renderer.capture
         from pxr import Usd, UsdGeom, Gf
         from isaac.scene import Scene, DroneMarker
         scene = Scene()
@@ -74,13 +76,9 @@ def main():
         import numpy as np
         import omni.timeline
         from PIL import Image
-        from isaacsim.sensors.camera import Camera
-        camera = Camera('/World/FrontCamera', resolution=(640, 480))
-        camera.initialize()
-        camera.set_focal_length(1.)
-        camera.set_horizontal_aperture(2.)
-        camera.set_clipping_range(.01, 900.)
-        camera.set_world_pose(np.array([0., 0., 3.]), np.array([1., 0., 0., 0.]), camera_axes='world')
+        from isaac.camera import Camera
+        camera = Camera('/World/FrontCamera', width=640, height=480, fov_x_deg=90)
+        camera.set_world_pose([0., 0., 3.], [1., 0., 0., 0.])
         omni.timeline.get_timeline_interface().play()
         deadline = time.monotonic() + 90
         for _ in range(20):
@@ -98,7 +96,7 @@ def main():
         render_ms = (time.monotonic() - started) * 1000 / 20
         screenshot = args.report_dir / 'rivermark.png'
         screenshot.unlink(missing_ok=True)
-        omni.renderer_capture.acquire_renderer_capture_interface().capture_next_frame_swapchain(str(screenshot))
+        omni.kit.renderer.capture.acquire_renderer_capture_interface().capture_next_frame_swapchain(str(screenshot))
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             app.update()
@@ -120,6 +118,7 @@ def main():
     finally:
         if marker:
             marker.close()
+        camera = None
         (args.report_dir / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
         print(json.dumps(report, indent=2), flush=True)
         app.close()

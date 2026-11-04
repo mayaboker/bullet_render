@@ -5,7 +5,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT), str(ROOT / 'isaac'), str(ROOT / 'build/isaac-deps'), str(ROOT.parent / 'bullet_msgs/src')]
+sys.path[:0] = [str(ROOT), str(ROOT / 'isaac'), str(ROOT / 'build/isaac6.2-deps'), str(ROOT.parent / 'bullet_msgs/src')]
 command_path = Path(sys.argv.pop(1))
 
 import transport
@@ -58,8 +58,8 @@ class ProbeReceiver(transport.Receiver):
                 elif action == 'load_world':
                     scene.load_world(command['path'])
                 elif action == 'screenshot':
-                    import omni.renderer_capture
-                    omni.renderer_capture.acquire_renderer_capture_interface().capture_next_frame_swapchain(command['path'])
+                    import omni.kit.renderer.capture
+                    omni.kit.renderer.capture.acquire_renderer_capture_interface().capture_next_frame_swapchain(command['path'])
                 elif action == 'focus':
                     scene.focus_drone()
                 elif action == 'snap_spawn':

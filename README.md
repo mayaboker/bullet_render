@@ -1,6 +1,6 @@
 # Bullet Render — native Godot / ZeroMQ camera
 
-An alternate [Isaac Sim 5.0 renderer](isaac/README.md) supports USD worlds,
+An alternate [Isaac Sim 6.2 renderer](isaac/README.md) supports USD worlds,
 a perspective drone marker, physics-confirmed starting position/takeoff-height
 controls, and confirmed truck-contact completion using the existing transport.
 

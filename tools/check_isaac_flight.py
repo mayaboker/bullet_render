@@ -7,12 +7,15 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import time
 
 import zmq
 from bullet_msgs.shm import FrameReader, topic_prefix
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from isaac.runtime import isaac_directory
 BIN = ROOT.parent / '.venv/bin'
 
 
@@ -68,7 +71,7 @@ def main():
             launch('app', [str(BIN / 'bullet-app'), '--transport-config', str(transport_path), '--bbox-endpoint', endpoints[4],
                            '--mission-config', str(args.mission_config.resolve()),
                            *(['--debug'] if args.app_debug else [])], ROOT.parent / 'bullet_app')
-            launch('isaac', ['/home/user/isaacsim5.0/python.sh', str(ROOT / 'tools/isaac_control_probe.py'), str(command_path),
+            launch('isaac', [str(isaac_directory() / 'python.sh'), str(ROOT / 'tools/isaac_control_probe.py'), str(command_path),
                              *([] if args.gui else ['--headless']), '--transport-config', str(transport_path),
                              *(['--takeoff-height', str(args.takeoff_height)] if args.takeoff_height is not None else []),
                              *(['--world', str(args.world)] if args.world is not None else []),

@@ -7,6 +7,7 @@ from pathlib import Path
 import signal
 import socket
 import subprocess
+import sys
 import time
 
 import cv2
@@ -18,11 +19,13 @@ from bullet_msgs.shm import FrameReader, topic_prefix
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from isaac.runtime import isaac_directory
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--isaac', type=Path, default=Path('/home/user/isaacsim5.0'))
+    parser.add_argument('--isaac', type=Path, default=isaac_directory())
     parser.add_argument('--report-dir', type=Path, default=Path('/tmp/bullet-isaac-render'))
     parser.add_argument('--gui', action='store_true', help='Also exercise the displayed viewport and control panel')
     parser.add_argument('--moving-camera', action='store_true', help='Alternate camera position to check exact image/source correspondence')

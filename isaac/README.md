@@ -1,6 +1,7 @@
 # Isaac Sim renderer
 
-Use `/home/user/isaacsim5.0` (Isaac 5.0, Python 3.11) as an alternate renderer.
+Use Isaac Sim 6.2 from `$ISAAC_SIM_DIR`, normally `$HOME/isaacsim6.2`,
+with its bundled Python 3.12 as an alternate renderer.
 PyBullet owns drone motion, RC stabilization, episode state and takeoff settings.
 Isaac owns the visible world, camera images, spectator controls and truck-contact queries.
 The app and MCAP recorder retain their existing transport interfaces.
@@ -15,10 +16,10 @@ Keep the usual physics, mission app and recorder processes running.
 
 ```bash
 cd /home/user/git/bullet/bullet_render
-/home/user/isaacsim5.0/python.sh isaac/main.py
+"${ISAAC_SIM_DIR:-$HOME/isaacsim6.2}/python.sh" isaac/main.py
 # Load the requested world and select a relative takeoff height:
-/home/user/isaacsim5.0/python.sh isaac/main.py \
-  --world /home/user/ov/rivermark.usd --takeoff-height 6
+"${ISAAC_SIM_DIR:-$HOME/isaacsim6.2}/python.sh" isaac/main.py \
+  --world /home/user/ov/rivermark.usd --takeoff-height 11
 ```
 
 Other options: `--spawn X Y Z`, `--target X Y Z` (truck origin), `--transport-config
@@ -61,9 +62,14 @@ ignored `build/` tree, so wiping `build/` to reset the native CMake caches
 removes them too; rerun this command afterwards:
 
 ```bash
-/home/user/isaacsim5.0/python.sh -m pip install \
-  --target build/isaac-deps -r isaac/requirements.txt
+"${ISAAC_SIM_DIR:-$HOME/isaacsim6.2}/python.sh" -m pip install \
+  --target build/isaac6.2-deps -r isaac/requirements.txt
 ```
+
+The `isaacsim5.0` Git branch preserves the renderer before this migration.
+Its Python 3.11 wheels remain in `build/isaac-deps`; do not copy them into the
+6.2 dependency directory. Test launchers honor `ISAAC_SIM_DIR` and otherwise
+use `$HOME/isaacsim6.2`.
 
 ## Controls and units
 
@@ -118,6 +124,8 @@ files are never saved or changed, and saved viewport/render settings are not imp
 Y-up scenes and declared units are converted to Z-up/metres. Invalid paths, absent
 default prims and worlds without loaded geometry are rejected, retaining the old world.
 Referenced rigid bodies are disabled in the rendering copy; flight stays in PyBullet.
+Kit may create an empty default PhysicsScene when the camera timeline starts;
+the drone remains a transform driven by Bullet telemetry, without Isaac dynamics.
 
 Rivermark is a small layer referencing online NVIDIA assets. Its main environment
 is available, but 39 distinct external prop/vegetation references were unresolved;
@@ -160,15 +168,22 @@ proposals, confirmed events, scenario settings and final app diagnostics.
 ## Camera timing
 
 Dimensions/FOV, RGB8 SHM and stamped v2 descriptors retain the existing contracts.
+The camera uses 6.2's `RtxCamera` and `CameraSensor` API, with explicit conversion
+from Bullet's forward/left/up body axes to USD camera axes and CPU RGBA readback.
+CameraSensor resolution is `(height, width)`; wire dimensions remain unchanged.
+See NVIDIA's [6.2 camera API reference](https://docs.isaacsim.omniverse.nvidia.com/6.2.0/py/source/extensions/isaacsim.sensors.experimental.rtx/docs/index.html).
 Isaac's supplied `isaacsim.exp.base.zero_delay.kit` experience matches each capture
 to its source pose. Idle rendering is limited to avoid delaying new poses; active
-captures pump the UI. Original physics timestamps, sensor freshness limits and RC
+captures pump the UI. Independent multi-tick sensor scheduling is disabled:
+6.2's default scheduling produced a previous-pose image in the alternating-pose
+check even with the zero-delay experience. Physics continues to own cadence.
+Original physics timestamps, sensor freshness limits and RC
 expiry remain unchanged. LOS command expiry depends on image age: slow rendering
 can stop physics even while the preview shows a detected box. Rich-world timing
 must be measured separately; these are soft real-time processes. Arrival-time MCAP
 does not provide exact image/pose association.
 
-Measured physics-measurement-to-app image age was about 24 ms on the starter
+Before the 6.2 migration, measured physics-measurement-to-app image age was about 24 ms on the starter
 slab but a median of 59 to 89 ms, with peaks above 120 ms, on Rivermark at about
 22 delivered frames per second. The Godot profile's 0.1 s `max_image_age_s`
 then rejects frames every few ticks; each rejection clears the navigator's
@@ -179,6 +194,13 @@ unchanged, so the physics expiry watchdog still freezes on app loss; the
 bearing filter and TTC fit use measurement timestamps, so added age is tolerated
 rather than hidden. Use that profile with Isaac and keep the Godot one for Godot.
 
+Local 6.2.0-rc.14 validation on the RTX 4090 measured median image ages of
+19 ms on the starter slab and 28 ms on Rivermark after initialization. Both
+displayed real-flight probes reached acquisition and verified three seconds of
+LOS approach, using 6 m and 11 m takeoff heights respectively. These short runs
+are not a full-flight timing guarantee. Contact completion, retry, reset and MCAP
+were checked separately with the deterministic scenario probe.
+
 ## Validation
 
 Focused tests cover actual TCP/SHM, exact topics, malformed input, stale/duplicate
@@ -187,7 +209,8 @@ contact geometry, retry, timeout and episode reset.
 
 ```bash
 uv run --locked --all-packages --all-extras --all-groups \
-  pytest -q tests/test_isaac_transport.py tests/test_isaac_scenario.py tests/test_isaac_surface.py
+  pytest -q tests/test_isaac_camera.py tests/test_isaac_transport.py \
+  tests/test_isaac_scenario.py tests/test_isaac_presets.py tests/test_isaac_surface.py
 ```
 
 GPU probes use isolated ports and separate processes, leaving a user's run alone:
@@ -214,7 +237,7 @@ uv run --locked --all-packages --all-extras --all-groups \
   python tools/check_isaac_scenario.py --reject-collisions \
   --report-dir /tmp/bullet-isaac-scenario-timeout
 # Real Rivermark, unit/up-axis conversion, surface heights and unchanged source hash.
-/home/user/isaacsim5.0/python.sh tools/check_isaac_world.py
+"${ISAAC_SIM_DIR:-$HOME/isaacsim6.2}/python.sh" tools/check_isaac_world.py
 ```
 
 Report directories retain logs, JSON results and screenshots. The collision probe
