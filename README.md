@@ -63,6 +63,11 @@ The receiver worker only buffers raw messages. Parsing, scene changes, capture
 and image publication happen on the Godot main thread. A `busy` guard keeps
 only one capture/readback in flight; newer pending poses can replace older ones.
 The queues and nonblocking locks favor current data over a growing backlog.
+In the packaged viewer, image descriptors also carry `host_capture_ns`, the
+host monotonic time recorded by physics immediately after the step used for
+that frame. The adapter uses pose-receipt time only for older pose publishers.
+`bullet_visual` passes this value with the bbox so App can align it with
+locally received MAVLink samples without reading simulator feedback.
 Camera configuration repeats once per second independently of capture cadence.
 
 ### Pose-to-image sequence

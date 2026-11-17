@@ -209,9 +209,11 @@ bool valid_pose(const Dictionary &d) {
     return norm >= 1e-24;
 }
 bool valid_viewer_pose(const Dictionary &pose) {
-    if (!shape(pose, {"header", "drone_id", "position_m", "orientation_xyzw"}) ||
+    if (!(shape(pose, {"header", "drone_id", "position_m", "orientation_xyzw"}) ||
+          shape(pose, {"header", "drone_id", "position_m", "orientation_xyzw", "host_capture_ns"})) ||
         pose["header"].get_type() != Variant::DICTIONARY || !text(pose["drone_id"]) ||
         !vector(pose["position_m"], 3, 1e9) || !vector(pose["orientation_xyzw"], 4, 1)) return false;
+    if (pose.has("host_capture_ns") && !number(pose["host_capture_ns"], 1, MAX_SEQUENCE, true)) return false;
     const Dictionary header = pose["header"];
     if (!shape(header, {"fid", "time_stamp"}) || !number(header["fid"], 0, MAX_SEQUENCE, true) ||
         header["time_stamp"].get_type() != Variant::DICTIONARY) return false;
@@ -651,7 +653,9 @@ bool ZmqCameraAdapter::publish_frame(const PackedByteArray &pixels, const Dictio
             const auto drone_id_json = JSON::stringify(pose["drone_id"], "", true, true).utf8();
             const auto message = impl->images.write(pixels.ptr(), pixels.size(), capture_ns, {},
                 std::string(header_json.get_data(), header_json.length()),
-                std::string(drone_id_json.get_data(), drone_id_json.length()));
+                std::string(drone_id_json.get_data(), drone_id_json.length()),
+                pose.has("host_capture_ns") ? uint64_t(int64_t(pose["host_capture_ns"])) :
+                uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(impl->capture_received.time_since_epoch()).count()));
             if (message.empty()) { ++impl->busy_slots; return true; }
             if (zmq_send(impl->publisher, message.data(), message.size(), ZMQ_DONTWAIT) < 0) {
                 if (zmq_errno() == EAGAIN) { ++impl->publication_drops; return true; }

@@ -95,7 +95,7 @@ public:
     // Empty notification means every slot is busy, never wait for readers.
     std::string write(const uint8_t *pixels, size_t size, uint64_t capture_ns,
                       const std::string &source_json = {}, const std::string &header_json = {},
-                      const std::string &drone_id_json = {}) {
+                      const std::string &drone_id_json = {}, uint64_t host_capture_ns = 0) {
         if (!frame_bytes || size != frame_bytes) throw std::runtime_error("SHM RGB frame size mismatch");
         ++sequence;
         for (size_t attempt = 0; attempt < SLOT_COUNT; ++attempt) {
@@ -130,7 +130,8 @@ public:
                 ",\"bytes\":" + std::to_string(frame_bytes) + ",\"sequence\":" + std::to_string(sequence) +
                 ",\"capture_ns\":" + std::to_string(capture_ns) +
                 (source_json.empty() ? "" : ",\"source\":" + source_json) +
-                (header_json.empty() ? "" : ",\"header\":" + header_json + ",\"drone_id\":" + drone_id_json) + "}";
+                (header_json.empty() ? "" : ",\"header\":" + header_json + ",\"drone_id\":" + drone_id_json) +
+                (host_capture_ns == 0 ? "" : ",\"host_capture_ns\":" + std::to_string(host_capture_ns)) + "}";
             if (metadata.size() > MAX_METADATA_BYTES) throw std::runtime_error("SHM descriptor too large");
             constexpr char topic[] = "camera/front/image";
             std::string message(topic, sizeof(topic));
