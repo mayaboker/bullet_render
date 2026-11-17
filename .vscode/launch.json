@@ -1,0 +1,28 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Godot with native ZeroMQ",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${env:HOME}/.local/bin/godot",
+      "args": [
+        "--path",
+        "${workspaceFolder}/godot"
+      ],
+      "cwd": "${workspaceFolder}",
+      "MIMode": "gdb",
+      "preLaunchTask": "Native: Build",
+      "environment": [
+        {
+          "name": "__NV_PRIME_RENDER_OFFLOAD",
+          "value": "1"
+        },
+        {
+          "name": "__GLX_VENDOR_LIBRARY_NAME",
+          "value": "nvidia"
+        }
+      ]
+    }
+  ]
+}

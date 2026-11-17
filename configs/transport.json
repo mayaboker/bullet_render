@@ -1,0 +1,6 @@
+{
+  "telemetry_endpoint": "tcp://127.0.0.1:5555",
+  "image_endpoint": "tcp://127.0.0.1:5556",
+  "control_endpoint": "tcp://127.0.0.1:5557",
+  "flight_command_endpoint": "tcp://127.0.0.1:5559"
+}

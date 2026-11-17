@@ -1,0 +1,310 @@
+{
+  "baseline_commits": {
+    "bullet_render": "6ea1756730b6037cf62f3a6c09602dd204c9ca7d",
+    "bullet_drone": "a267ee0aebb56e39050cb31b2f537c45fbff1b9f",
+    "mcap_bagger": "3c38d6e138579180f8f2892fc7f85ab6aaee0146"
+  },
+  "experiment": "godot_zmq working trees (uncommitted)",
+  "environment": {
+    "os": "Ubuntu 24.04",
+    "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU",
+    "driver": "580.178.04",
+    "godot": "4.7.2",
+    "renderer": "OpenGL compatibility",
+    "build": "Debug",
+    "libzmq": "4.3.5",
+    "pyzmq": "27.2.0",
+    "zenoh": "1.10.1"
+  },
+  "method": "Three 60-second runs per transport, alternating Zenoh/ZMQ, first image starts timer; identical scene/camera/physics/recorder settings and timing/CPU instrumentation. No concurrent builds or test suites. Independent MCAP readback after each run.",
+  "medians": {
+    "zenoh": {
+      "fps": 28.67964390672003,
+      "capture_ms_mean": 11.8070401863716,
+      "publish_ms_mean": 0.735791314837153,
+      "sequence_gaps": 11,
+      "cpu_percent": {
+        "godot": 49.43350668936638,
+        "physics": 28.14668885154289,
+        "recorder": 14.956633762483495
+      }
+    },
+    "zmq-ipc": {
+      "fps": 28.96312649311186,
+      "capture_ms_mean": 15.7174126611958,
+      "publish_ms_mean": 0.143444314185229,
+      "sequence_gaps": 23,
+      "cpu_percent": {
+        "godot": 42.061525471009396,
+        "physics": 27.238540035297582,
+        "recorder": 14.060292254849118
+      }
+    }
+  },
+  "runs": [
+    {
+      "transport": "zenoh",
+      "run": 1,
+      "cpu_percent": {
+        "godot": 49.43350668936638,
+        "physics": 28.78069392157181,
+        "recorder": 14.956633762483495
+      },
+      "native_stats": [
+        {
+          "log": "godot.log",
+          "last_observed": {
+            "capture_ms_mean": 11.8070401863716,
+            "error": "",
+            "frames": 1717,
+            "invalid": 0,
+            "publish_ms_mean": 0.741761211415259,
+            "running": true,
+            "sequence_gaps": 18,
+            "stale": 0,
+            "superseded": 20,
+            "timing_frames": 1717
+          }
+        }
+      ],
+      "fault_checks": false,
+      "seconds": 60.04024797695456,
+      "measured_fps": 28.564172497393315,
+      "images_read_back": 1717,
+      "poses_read_back": 1915,
+      "counts": {
+        "camera/front/image": {
+          "accepted": 1717,
+          "written": 1717,
+          "shared_memory": 1717
+        },
+        "render/drone_1/pose": {
+          "accepted": 1915,
+          "written": 1915,
+          "shared_memory": 0
+        }
+      },
+      "mcap_bytes": 1583621373,
+      "peak_queued_bytes": 922050
+    },
+    {
+      "transport": "zmq-ipc",
+      "run": 1,
+      "cpu_percent": {
+        "godot": 39.283472417878706,
+        "physics": 27.238540035297582,
+        "recorder": 13.86083505160097
+      },
+      "native_stats": [
+        {
+          "log": "godot.log",
+          "last_observed": {
+            "capture_ms_mean": 17.8724297163995,
+            "error": "",
+            "frames": 1622,
+            "invalid": 0,
+            "publish_ms_mean": 0.14498643649815,
+            "running": true,
+            "sequence_gaps": 78,
+            "stale": 0,
+            "superseded": 84,
+            "timing_frames": 1622
+          }
+        }
+      ],
+      "fault_checks": false,
+      "seconds": 60.02524356596405,
+      "measured_fps": 28.038203595966863,
+      "images_read_back": 1686,
+      "poses_read_back": 1850,
+      "counts": {
+        "camera/front/image": {
+          "accepted": 1686,
+          "written": 1686
+        },
+        "render/drone_1/pose": {
+          "accepted": 1850,
+          "written": 1850
+        }
+      },
+      "mcap_bytes": 1555014932,
+      "peak_queued_bytes": 922050
+    },
+    {
+      "transport": "zenoh",
+      "run": 2,
+      "cpu_percent": {
+        "godot": 45.91740897260577,
+        "physics": 28.14668885154289,
+        "recorder": 19.619407968708593
+      },
+      "native_stats": [
+        {
+          "log": "godot.log",
+          "last_observed": {
+            "capture_ms_mean": 14.8326447527141,
+            "error": "",
+            "frames": 1658,
+            "invalid": 0,
+            "publish_ms_mean": 0.735791314837153,
+            "running": true,
+            "sequence_gaps": 11,
+            "stale": 0,
+            "superseded": 12,
+            "timing_frames": 1658
+          }
+        }
+      ],
+      "fault_checks": false,
+      "seconds": 60.042586497962475,
+      "measured_fps": 28.67964390672003,
+      "images_read_back": 1724,
+      "poses_read_back": 1854,
+      "counts": {
+        "camera/front/image": {
+          "accepted": 1724,
+          "written": 1724,
+          "shared_memory": 1724
+        },
+        "render/drone_1/pose": {
+          "accepted": 1854,
+          "written": 1854,
+          "shared_memory": 0
+        }
+      },
+      "mcap_bytes": 1590044304,
+      "peak_queued_bytes": 922051
+    },
+    {
+      "transport": "zmq-ipc",
+      "run": 2,
+      "cpu_percent": {
+        "godot": 42.061525471009396,
+        "physics": 27.77993778136794,
+        "recorder": 19.097665685331528
+      },
+      "native_stats": [
+        {
+          "log": "godot.log",
+          "last_observed": {
+            "capture_ms_mean": 15.7174126611958,
+            "error": "",
+            "frames": 1706,
+            "invalid": 0,
+            "publish_ms_mean": 0.143444314185229,
+            "running": true,
+            "sequence_gaps": 23,
+            "stale": 0,
+            "superseded": 25,
+            "timing_frames": 1706
+          }
+        }
+      ],
+      "fault_checks": false,
+      "seconds": 60.00733382196631,
+      "measured_fps": 28.96312649311186,
+      "images_read_back": 1740,
+      "poses_read_back": 1813,
+      "counts": {
+        "camera/front/image": {
+          "accepted": 1740,
+          "written": 1740
+        },
+        "render/drone_1/pose": {
+          "accepted": 1813,
+          "written": 1813
+        }
+      },
+      "mcap_bytes": 1604773508,
+      "peak_queued_bytes": 922049
+    },
+    {
+      "transport": "zenoh",
+      "run": 3,
+      "cpu_percent": {
+        "godot": 50.04381823817423,
+        "physics": 27.60406352218865,
+        "recorder": 13.643770684775197
+      },
+      "native_stats": [
+        {
+          "log": "godot.log",
+          "last_observed": {
+            "capture_ms_mean": 11.1623781861292,
+            "error": "",
+            "frames": 1687,
+            "invalid": 0,
+            "publish_ms_mean": 0.725113218731476,
+            "running": true,
+            "sequence_gaps": 11,
+            "stale": 0,
+            "superseded": 11,
+            "timing_frames": 1687
+          }
+        }
+      ],
+      "fault_checks": false,
+      "seconds": 60.027394106960855,
+      "measured_fps": 28.686902465424776,
+      "images_read_back": 1724,
+      "poses_read_back": 1824,
+      "counts": {
+        "camera/front/image": {
+          "accepted": 1724,
+          "written": 1724,
+          "shared_memory": 1724
+        },
+        "render/drone_1/pose": {
+          "accepted": 1824,
+          "written": 1824,
+          "shared_memory": 0
+        }
+      },
+      "mcap_bytes": 1590029754,
+      "peak_queued_bytes": 922047
+    },
+    {
+      "transport": "zmq-ipc",
+      "run": 3,
+      "cpu_percent": {
+        "godot": 44.479834502899465,
+        "physics": 27.187674123120576,
+        "recorder": 14.060292254849118
+      },
+      "native_stats": [
+        {
+          "log": "godot.log",
+          "last_observed": {
+            "capture_ms_mean": 12.3200660486674,
+            "error": "",
+            "frames": 1726,
+            "invalid": 0,
+            "publish_ms_mean": 0.132641367323291,
+            "running": true,
+            "sequence_gaps": 2,
+            "stale": 0,
+            "superseded": 2,
+            "timing_frames": 1726
+          }
+        }
+      ],
+      "fault_checks": false,
+      "seconds": 60.02720176096773,
+      "measured_fps": 29.303381606966354,
+      "images_read_back": 1762,
+      "poses_read_back": 1822,
+      "counts": {
+        "camera/front/image": {
+          "accepted": 1762,
+          "written": 1762
+        },
+        "render/drone_1/pose": {
+          "accepted": 1822,
+          "written": 1822
+        }
+      },
+      "mcap_bytes": 1625056637,
+      "peak_queued_bytes": 922049
+    }
+  ]
+}
