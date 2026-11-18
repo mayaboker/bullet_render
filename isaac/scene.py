@@ -49,12 +49,20 @@ class Scene:
             self.load_world(world)
 
     def box(self, path, position, size, colour):
-        from pxr import Gf, UsdGeom
+        from pxr import Gf, Sdf, UsdGeom, UsdShade
         cube = UsdGeom.Cube.Define(self.stage, path)
         cube.CreateSizeAttr(1.0)
         cube.CreateDisplayColorAttr([Gf.Vec3f(*colour)])
         cube.AddTranslateOp().Set(Gf.Vec3d(*position))
         cube.AddScaleOp().Set(Gf.Vec3d(*size))
+        mat_path = path + '/Material'
+        material = UsdShade.Material.Define(self.stage, mat_path)
+        shader = UsdShade.Shader.Define(self.stage, mat_path + '/Shader')
+        shader.CreateIdAttr('UsdPreviewSurface')
+        shader.CreateInput('diffuseColor', Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*colour))
+        shader.CreateInput('roughness', Sdf.ValueTypeNames.Float).Set(0.7)
+        material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), 'surface')
+        UsdShade.MaterialBindingAPI.Apply(cube.GetPrim()).Bind(material)
 
     def set_target(self, position):
         from pxr import Gf

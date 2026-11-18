@@ -57,6 +57,9 @@ class Controls:
                     self.target_fields = self.xyz(scene.target_position)
                     self.snap_target = ui.Button('Snap target Z to world surface', height=26, clicked_fn=self.snap_target_height)
                     self.move_target = ui.Button('Move target (while stopped)', height=28, clicked_fn=self.apply_target)
+                    self.pick_target = ui.Button('Pick target on terrain (click viewport)', height=28, clicked_fn=self.toggle_pick_mode)
+                    self._picking = False
+                    self._pick_sub = None
                     self.notice = ui.Label('', height=45, word_wrap=True)
         scene.focus_drone()
 
@@ -125,7 +128,13 @@ class Controls:
         self.run(lambda: self.snap_height(self.spawn_fields, SPAWN_CLEARANCE_M, 'Starting'))
 
     def snap_target_height(self):
-        self.run(lambda: self.snap_height(self.target_fields, 0.0, 'Target'))
+        def snap_and_move():
+            result = self.snap_height(self.target_fields, 0.0, 'Target')
+            position = self.values(self.target_fields)
+            self.receiver.set_target(position)
+            self.scene.set_target(position)
+            return result
+        self.run(snap_and_move)
 
     def apply_target(self):
         def action():
@@ -135,6 +144,58 @@ class Controls:
             self.receiver.set_target(position)
             self.scene.set_target(position)
         self.run(action)
+
+    def toggle_pick_mode(self):
+        if self._picking:
+            self._stop_picking()
+            return
+        from omni.ui import scene as sc
+        from isaac.scene import main_viewport, MAIN_VIEWPORT_WINDOW
+        from omni.kit.viewport.utility import get_active_viewport_window
+        window = get_active_viewport_window(MAIN_VIEWPORT_WINDOW) or get_active_viewport_window()
+        if window is None:
+            self.notice.text = 'No viewport window found'
+            return
+        viewport_api = window.viewport_api
+        frame = window.get_frame('bullet_pick_target')
+        self._pick_view = sc.SceneView()
+        frame.add_child(self._pick_view)
+        viewport_api.add_scene_view(self._pick_view)
+        self._pick_viewport = viewport_api
+
+        def on_click(sender):
+            payload = sender.get_gesture_payload()
+            ndc = payload.mouse
+            from omni.kit.viewport.window.raycast import perform_raycast_query
+            pixel = viewport_api.map_ndc_to_texture_pixel((ndc[0], ndc[1]))
+            def on_hit(prim_path, world_pos, *args, **kwargs):
+                if world_pos is None or world_pos == (0, 0, 0):
+                    self.notice.text = 'No surface hit; try clicking on the terrain'
+                    return
+                x, y, z = float(world_pos[0]), float(world_pos[1]), float(world_pos[2])
+                for field, val in zip(self.target_fields, (x, y, z)):
+                    field.model.set_value(round(val, 3))
+                self.receiver.set_target((x, y, z))
+                self.scene.set_target((x, y, z))
+                self.notice.text = f'Target placed at ({x:.2f}, {y:.2f}, {z:.2f})'
+                self._stop_picking()
+            perform_raycast_query(viewport_api, (ndc[0], ndc[1]), pixel, on_hit, 'bullet_pick_target')
+
+        with self._pick_view.scene:
+            self._pick_screen = sc.Screen(gestures=[sc.ClickGesture(on_ended_fn=on_click)])
+        self._picking = True
+        self.pick_target.text = 'PICKING... (click terrain or cancel)'
+        self.notice.text = 'Click on the terrain to place the red truck'
+
+    def _stop_picking(self):
+        if not self._picking:
+            return
+        self._picking = False
+        self.pick_target.text = 'Pick target on terrain (click viewport)'
+        if hasattr(self, '_pick_viewport') and hasattr(self, '_pick_view'):
+            self._pick_viewport.remove_scene_view(self._pick_view)
+            self._pick_view.scene.clear()
+        self.notice.text = ''
 
     def editable(self):
         r = self.receiver
@@ -156,8 +217,8 @@ class Controls:
         self.reset.enabled = connected and not r.pending_spawn
         editable = self.editable()
         for widget in (*self.spawn_fields, self.height_field, self.apply, self.snap_spawn,
-                       *self.target_fields, self.move_target, self.snap_target):
-            widget.enabled = editable
+                       *self.target_fields, self.move_target, self.snap_target, self.pick_target):
+            widget.enabled = editable or self._picking
         self.load_world.enabled = not running and not r.pending_spawn
         self.front.enabled = bool(self.scene.stage.GetPrimAtPath(FRONT_CAMERA))
         spawn = r.spawn_state
@@ -178,5 +239,6 @@ class Controls:
         self.position.text = 'Drone XYZ: ' + ', '.join(f'{x:.2f}' for x in pose['position_m'])
 
     def close(self):
+        self._stop_picking()
         self.marker.close()
         self.window.destroy()
