@@ -1,5 +1,18 @@
 # Release Log — alice branch (changes from 0.1-alpha)
 
+## 0.2-alice (changes from 0.1-alice)
+
+- `isaac/world_presets.json`
+  Aligned spawn Y with truck Y (-26.666) for straight-ahead approach in
+  rivermark.usd. Raised spawn Z to 10.0 to clear terrain at new position.
+
+- `README.md`
+  Updated header to describe both Godot and Isaac Sim backends.
+
+- Merged bob branch: tmux pane labels (bullet_ng only, no bullet_render changes).
+
+## 0.1-alice (changes from 0.1-alpha)
+
 ## bullet_render
 
 1 commit, 16 files changed, +1250 / -1 lines.
