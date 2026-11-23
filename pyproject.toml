@@ -1,7 +1,7 @@
 [project]
 name = "bullet-render"
 version = "0.2.0"
-description = "Native Godot ZeroMQ camera adapter and integration checks"
+description = "Native Godot ZeroMQ camera adapter and Isaac Sim renderer"
 requires-python = ">=3.12"
 dependencies = ["bullet-msgs"]
 
@@ -10,9 +10,12 @@ package = false
 
 [dependency-groups]
 dev = ["pytest>=9,<10", "pyzmq>=27,<28", "jsonschema>=4,<5"]
+isaac = ["pyzmq>=27,<28", "bullet-simulation-protocol", "bullet-image-transport"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
 [tool.uv.sources]
 bullet-msgs = { workspace = true }
+bullet-simulation-protocol = { path = "../bullet_drone/libs/bullet_simulation_protocol", editable = true }
+bullet-image-transport = { path = "../bullet_drone/libs/bullet_image_transport", editable = true }
