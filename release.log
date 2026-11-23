@@ -1,0 +1,61 @@
+# Release Log — alice branch (changes from 0.1-alpha)
+
+## bullet_render
+
+1 commit, 16 files changed, +1250 / -1 lines.
+
+### New files — isaac/ module
+
+- `isaac/main.py` (161 lines)
+  Isaac Sim 6.2 render-only backend entry point. Launched via python.sh by
+  the bullet_drone IsaacRenderer.
+
+- `isaac/camera.py` (40 lines)
+  RTX camera adapter matching the Bullet FLU pose/RGBA interface.
+  Converts orientation conventions between Bullet body frame and USD camera.
+
+- `isaac/scene.py` (247 lines)
+  In-memory USD world builder. Creates target geometry, spectator camera
+  marker, and loads world files.
+
+- `isaac/scenario.py` (147 lines)
+  Truck geometry and contact lifecycle. Sphere-sweep collision detection,
+  independent of USD/GPU.
+
+- `isaac/transport.py` (152 lines)
+  Bounded ZMQ + shared-memory transport. Subscribes to pose/config telemetry
+  from the launcher's RenderPublisher, publishes camera images back via SHM.
+
+- `isaac/surface.py` (47 lines)
+  Vertical surface queries over world-space triangles. Pure geometry, no
+  USD/GPU/numpy imports.
+
+- `isaac/presets.py` (17 lines)
+  Per-world defaults (spawn and target positions). Reads world_presets.json.
+
+- `isaac/runtime.py` (11 lines)
+  Runtime location helpers shared by the renderer and its launch probes.
+
+- `isaac/world_presets.json` (6 lines)
+  Preset config for rivermark.usd (spawn and target coordinates).
+
+### New files — tests
+
+- `tests/test_isaac_camera.py` — camera axis convention preservation
+- `tests/test_isaac_presets.py` — world preset validation
+- `tests/test_isaac_scenario.py` — contact geometry and confirmation logic
+- `tests/test_isaac_surface.py` — vertical surface height queries
+- `tests/test_isaac_transport.py` — real TCP and SHM transport boundary checks
+
+### New files — tools
+
+- `tools/check_truck_color.py` (122 lines)
+  Captures one frame from the running Isaac renderer and reports the truck's
+  HSV range. Used for tuning bullet_visual color detection thresholds.
+
+### Modified files
+
+- `pyproject.toml`
+  Updated description to include Isaac Sim. Added `isaac` dependency group
+  (pyzmq, bullet-simulation-protocol, bullet-image-transport). Added workspace
+  source paths for the two bullet_drone libs.

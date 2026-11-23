@@ -1,15 +1,24 @@
-# Bullet Render — native Godot / ZeroMQ camera
+# Bullet Render — Godot / Isaac Sim camera
 
 This project is a member of the [Bullet workspace](../README.md). All six
 projects share `../.venv` and `../uv.lock`; run uv commands with the
 workspace flags below to retain every project and optional dependency.
 
-Godot renders a landscape and forward camera from `bullet_drone` ground-truth
-poses. The native C++ adapter receives JSON telemetry over loopback ZMQ TCP and
-publishes image descriptors over TCP, with RGB8 pixels in POSIX shared memory.
-The native adapter owns its C++ transport headers under `src/native/include`.
-The packaged viewer exchanges pose, camera and image messages with the Python
-libraries in `bullet_drone/libs` without importing Python at runtime.
+Two rendering backends are supported:
+
+- **Godot** (default) — native C++ adapter receives JSON telemetry over loopback
+  ZMQ TCP and publishes image descriptors over TCP, with RGB8 pixels in POSIX
+  shared memory. The native adapter owns its C++ transport headers under
+  `src/native/include`. The packaged viewer exchanges pose, camera and image
+  messages with the Python libraries in `bullet_drone/libs` without importing
+  Python at runtime.
+
+- **Isaac Sim 6.2** — the `isaac/` module provides a render-only backend launched
+  via Isaac's `python.sh`. It subscribes to the same pose/config telemetry from
+  `bullet_drone` and publishes camera images back via ZMQ + shared memory, using
+  the same transport protocol as Godot. See `isaac/main.py` for the entry point
+  and `bullet_drone/tools/run_target_scene.sh --isaac` for the launch wrapper.
+
 Sibling `bullet_app` provides the live camera/bounding-box preview with `--debug`.
 
 A parked red delivery truck sits **50 m ahead of the physics origin** (horizontal
