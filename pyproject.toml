@@ -1,6 +1,6 @@
 [project]
 name = "bullet-render"
-version = "0.2.0"
+version = "0.25.0"
 description = "Native Godot ZeroMQ camera adapter and Isaac Sim renderer"
 requires-python = ">=3.12"
 dependencies = ["bullet-msgs"]

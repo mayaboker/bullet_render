@@ -1,4 +1,21 @@
-# Release Log — alice branch (changes from 0.1-alpha)
+# Release Log — Integration branch
+
+## 0.25-Integration (changes from 0.2-alice)
+
+### New files
+
+- `configs/transport_remote.json`
+  ZMQ transport config for remote viewer setup. Connects to simulation machine
+  at 10.0.0.16 for telemetry; images and flight commands stay local.
+
+- `configs/physics_remote.json`
+  Render config pointing at transport_remote.json. Same camera/fps as
+  physics.json.
+
+### Modified files
+
+- `pyproject.toml`
+  Version bump 0.2.0 → 0.25.0.
 
 ## 0.2-alice (changes from 0.1-alice)
 
